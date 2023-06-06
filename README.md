@@ -1,5 +1,5 @@
 # Towards biologically plausible Dreaming and Planning
-This repository is the official implementation of *Biologically Plausible Model-Based Reinforcement Learning in Recurrent Spiking Networks*.
+This repository is the official implementation of *Towards biologically plausible Dreaming and Planning in recurrent spiking networks*.
 
 #### 1. Specification of dependencies
 
