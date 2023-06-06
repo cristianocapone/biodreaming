@@ -1,7 +1,6 @@
 """
     © 2023 This work is licensed under a CC-BY-NC-SA license.
-    Title: Biologically Plausible Model-Based Reinforcement Learning in Recurrent Spiking Networks
-    Authors: Anonymus
+    Title: Towards biologically plausible Dreaming and Planning in recurrent spiking networks
 """
 
 import numpy as np
