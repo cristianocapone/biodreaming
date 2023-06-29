@@ -2,7 +2,7 @@
     © 2023 This work is licensed under a CC-BY-NC-SA license.
     Title: Towards biologically plausible Dreaming and Planning in recurrent spiking networks
 """
-
+import pickle
 import numpy as np
 import src.utils as ut
 from optimizer import Adam, SimpleGradient
@@ -80,6 +80,232 @@ class BasicPongAgent:
         ball_y = ram[54]           # Y coordinate of ball
 
         return (cpu_score, player_score, cpu_paddle_y, player_paddle_y, ball_x, ball_y)
+
+class AGEMONE:
+
+    def __init__ (self, config):
+        # This are the network size N, input I, output O and max temporal span T
+        self.N, self.I, self.O, self.T = config['N'], config['I'], config['O'], config['T']
+
+        self.dt = config['dt']
+
+        self.itau_m    = np.exp(-self.dt / config['tau_m'])
+        self.itau_s    = np.exp(-self.dt / config['tau_s'])
+        self.itau_ro   = np.exp(-self.dt / config['tau_ro'])
+        self.itau_star = np.exp(-self.dt / config['tau_star'])
+
+        self.dv = config['dv']
+
+        self.hidden = config['hidden_steps'] if 'hidden_steps' in config else 1
+
+        # This is the network connectivity matrix
+        self.J_rec = np.random.normal (0., config['sigma_Jrec'], size = (self.N, self.N))
+        self.J_rec /= np.sqrt(self.N) # Normalize the connectivity matrix
+
+        self.J_out = np.random.normal (0., config['sigma_Jout'], size = (self.O, self.N))
+
+        # This is the network input, teach and output matrices
+        self.J_input = np.random.normal (0., config['sigma_input'], size = (self.N, self.I))
+        self.J_teach = np.random.normal (0., config['sigma_teach'], size = (self.N, self.O))
+
+        # Remove self-connections from synaptic matrix
+        np.fill_diagonal (self.J, 0.)
+
+        # Impose reset after spike
+        self.s_inh = -config['s_inh']
+        self.J_reset = np.diag(np.ones(self.N) * self.s_inh)
+
+        # This is the external field
+        h = config['h']
+
+        assert type (h) in (np.ndarray, float, int)
+        self.h = h if isinstance (h, np.ndarray) else np.ones (self.N) * h
+
+        # Membrane potential
+        self.H = np.ones (self.N) * config['Vo']
+        self.Vo = config['Vo']
+
+        # These are the spikes train and the filtered spikes train
+        self.S = np.zeros (self.N)
+        self.S_hat = np.zeros (self.N)
+
+        # This is the single-time output buffer
+        self.state_out = np.zeros (self.N)
+
+        # Check whether output should be put through a sigmoidal gate
+        self.outsig = config['outsig'] if 'outsig' in config else False
+
+        # Save the way policy should step in closed-loop scenario
+        self.step_mode = 'amax'#par['step_mode'] if 'step_mode' in par else 'UNSET'
+
+        self.dJ_filt_rec = 0
+        self.dJ_filt_out = 0
+
+        # Here we save the model configuration
+        self.config = config
+
+    def _sigm (self, x, dv = None):
+        if dv is None:
+            dv = self.dv
+
+        # If dv is too small, no need for elaborate computation, just return
+        # the theta function
+        if dv < 1 / 30:
+            return x > 0
+
+        # Here we apply numerically stable version of sigmoid activation
+        # based on the sign of the potential
+        y = x / dv
+
+        out = np.zeros (x.shape)
+        mask = x > 0
+        out [mask] = 1. / (1. + np.exp (-y [mask]))
+        out [~mask] = np.exp (y [~mask]) / (1. + np.exp (y [~mask]))
+
+        return out
+
+    def _dsigm (self, x, dv = None):
+        return self._sigm (x, dv = dv) * (1. - self._sigm (x, dv = dv))
+
+    def step(self, inp : np.ndarray, deterministic : bool = False):
+        itau_m = self.itau_m
+        itau_s = self.itau_s
+
+        self.S_hat = self.S_hat * itau_s + self.S * (1. - itau_s)
+
+        self.H = self.H * itau_m + (1. - itau_m) * (
+                                                    self.J_rec @ self.S_hat +\
+                                                    self.J_input @ inp + self.h
+                                                ) +\
+                                self.J_reset @ self.S
+        
+        self.lam = self._sigm( self.H, dv = self.dv)
+        self.dH = self.dH  * itau_m + self.S_hat * (1. - itau_m)
+
+        self.S = np.heaviside(self.lam - (0.5 if deterministic else np.random.rand(self.N)), 0)
+
+        # Here we return the chosen next action
+        action, out = self.policy(self.S)
+
+        self.out = out
+        self.action = action
+
+        return action, out
+
+    def learn (self, reward : float, alpha_J : float = 0.01):
+        dJ = np.outer ((self.S - self.lam), self.dH)
+
+        self.dJ_filt_rec = self.dJ_filt_rec * (1 - alpha_J) + alpha_J * dJ
+
+        self.J += reward * self.dJ_filt_rec
+
+    def learn_error(self, reward : float, alpha_J : float = 0.002, lambda_entropy : float = 0.001):
+        ac_vector = np.zeros((3,))
+        ac_vector[self.action] = 1
+        dJ_rec = np.outer(self.J_out.T @ (ac_vector - self.out) * self._dsigm(self.H, dv = 1.), self.dH)
+
+        self.entropy = - np.sum(self.prob*np.log(self.prob))
+
+        dJ_ent_rec = - np.outer(self.J_out.T @ (self.prob * np.log(self.prob) + self.entropy)*self._dsigm (self.H, dv = 1.), self.dH)
+        dJ_ent_out = - np.outer(self.prob * np.log(self.prob) + self.entropy, self.state_out.T)
+
+        dJ_out =  np.outer((ac_vector - self.out), self.state_out.T)
+        self.dJ_filt_rec = self.dJ_filt_rec * (1 - alpha_J) + dJ_rec
+        self.dJ_filt_out = self.dJ_filt_out * (1 - alpha_J) + dJ_out
+
+        self.dJ_rec_aggregate += (reward * self.dJ_filt_rec + lambda_entropy * dJ_ent_rec * 0)
+        self.dJ_out_aggregate += (reward * self.dJ_filt_out + lambda_entropy * dJ_ent_out * 0)
+
+    def update_J(self, r):
+
+        self.J = self.adam_rec.step(self.J, self.dJ_rec_aggregate)
+        np.fill_diagonal (self.J, 0.)
+
+        self.J_out = self.adam_out.step(self.J_out, self.dJ_out_aggregate)
+        self.J_out = self.J_out + self.config['alpha_rout'] * self.dJ_out_aggregate
+
+        self.dJ_rec_aggregate = 0
+        self.dJ_out_aggregate = 0
+
+    def learn_model(self, s_pred, r_pred, state, reward, eta_rec_r : float = 0.5):
+
+        self.dJ_out_s_aggregate += np.outer(state  - s_pred, self.state_out)
+        self.dJ_out_r_aggregate += np.outer(reward - r_pred, self.state_out)
+
+        dJ_s = np.outer (self.J_out_s_pred.T @ (state  - s_pred) * self._dsigm(self.H, dv = 1.), self.dH)
+        dJ_r = np.outer (self.J_out_r_pred.T @ (reward - r_pred) * self._dsigm(self.H, dv = 1.), self.dH)
+
+        self.dJ_aggregate += dJ_s
+        self.dJ_aggregate += dJ_r * eta_rec_r
+
+    def model_update(self):
+        self.J = self.adam_rec.step(self.J, self.dJ_aggregate)
+        self.J_out_s_pred = self.adam_out_s.step(self.J_out_s_pred, self.dJ_out_s_aggregate)
+        self.J_out_r_pred = self.adam_out_r.step(self.J_out_r_pred, self.dJ_out_r_aggregate)
+
+        self.dJ_out_r_aggregate = 0
+        self.dJ_out_s_aggregate = 0
+        self.dJ_aggregate = 0
+
+    def policy(self, state, mode : str = 'amax', explore = False):
+        self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
+
+        out = self.Jout @ self.state_out*10.*.5
+        if self.config['outsig']:
+            out = np.exp(out) / np.sum(np.exp(out))
+
+        prob = out
+        self.prob = prob
+
+        action = np.random.choice(len(out), p = prob)
+        #action = random.choices( population=[0, 1, 2],weights=out,k=1)
+
+        return int(action), out
+
+    def prediction(self):
+        s_pred = self.J_out_s_pred @ self.state_out
+        r_pred = self.J_out_r_pred @ self.state_out
+        return s_pred,r_pred
+
+
+    def reset(self, init = None):
+        self.S = init if init is not None else np.zeros (self.N)
+        self.S_hat = self.S [:] * self.itau_s if init is not None else np.zeros (self.N)
+
+        self.state_out *= 0
+
+        self.H = self.Vo
+
+    def forget(self, J_rec : np.ndarray | None = None, J_out  : np.ndarray | None = None):
+        self.J_rec = np.random.normal(0., self.config['sigma_Jrec'], size = (self.N, self.N)) if J_rec is None else J_rec.copy()
+        self.J_out = np.random.normal(0., self.config['sigma_Jout'], size = (self.O, self.N)) if J_out is None else J_out.copy()
+
+    def save (self, filename):
+        # Here we collect the relevant quantities to store
+        bundle = {
+            'J_input' : self.J_input,
+            'J_teach' : self.J_teach,
+            'J_out' : self.J_out,
+            'J_rec' : self.J_rec,
+            'config' : self.config,
+        }
+
+        with open(filename, 'wb') as f:
+            pickle.dump(bundle)
+
+    @classmethod
+    def load(cls, filename):
+        with open(filename, 'rb') as f:
+            bundle = pickle.load(f)
+
+        obj = cls(bundle['config'])
+
+        obj.J_input = bundle['J_input']
+        obj.J_teach = bundle['J_teach']
+        obj.J_out = bundle['J_out']
+        obj.J_rec = bundle['J_rec']
+
+        return obj
 
 class AGEMO:
 
@@ -160,7 +386,7 @@ class AGEMO:
         if dv < 1 / 30:
             return x > 0
 
-        # Here we apply numerically stable version of signoid activation
+        # Here we apply numerically stable version of sigmoid activation
         # based on the sign of the potential
         y = x / dv
 
@@ -216,18 +442,21 @@ class AGEMO:
         return action, out
 
     def learn (self, r):
-
+        # ! WHY PUT THIS NUMBER HERE? 
         alpha_J = 0.01
 
         dJ = np.outer ((self.S - self.lam), self.dH)
+
+        # ! SHOUDN'T IT BE alpha_J * dJ??
         self.dJfilt = self.dJfilt*(1-alpha_J) + dJ
 
+        # ! WHY MULTIPLY BY ZERO? WHY THE 0.1 BEFORE r?
         self.J += 0.1*r*self.dJfilt
         self.J -= self.J*0.000
 
     def learn_error (self, r):
-
-        ch = 2.
+        # ! WHAT IS THIS CH?
+        ch = 2
 
         alpha_J = 0.002
         ac_vector = np.zeros((3,))
@@ -243,14 +472,16 @@ class AGEMO:
         self.dJfilt = self.dJfilt*(1-alpha_J) + dJ
         self.dJfilt_out = self.dJfilt_out*(1-alpha_J) + dJ_out
 
+        # ! SHADY MULTIPLY BY ZERO
         self.dJ_aggregate += (r*self.dJfilt + ch*dJ_ent*0)
         self.dJout_aggregate += (r*self.dJfilt_out + ch*dJ_ent_out*0)
 
-    def update_J (self, r):
+    def update_J(self, r):
 
-        self.J = self.adam_rec.step (self.J, self.dJ_aggregate)#
-        np.fill_diagonal (self.J, 0.);
+        self.J = self.adam_rec.step(self.J, self.dJ_aggregate)
+        np.fill_diagonal (self.J, 0.)
 
+        # ! WHY TWO UPDATE OF J_OUT??
         self.Jout = self.adam_out.step (self.Jout, self.dJout_aggregate)
         self.Jout = self.Jout + self.par["alpha_rout"]*self.dJout_aggregate
 

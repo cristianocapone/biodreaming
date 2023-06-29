@@ -191,3 +191,47 @@ CARTPOLE_V0_PAR = {'dt' : dt,
        'verbose'  : True,
        'rank'     : None
 }
+
+BUTTONFOOD_V0_PAR = {
+       'dt' : dt,
+       'tau_m'    : 6 * dt,
+       'tau_s'    : 4 * dt,
+       'tau_ro'   : 1 * dt,
+       'tau_star' : 1 * dt,
+
+       'N' : 500, 'T' : 800, 'I' : 4, 'O' : 3,
+
+       'dv' : 0.05 , 'Vo' : -4, 'h' : -8, 's_inh' : 100,
+
+       'gamma' : .99,
+       'lerp'  : 0.01,
+
+       'sigma_Jrec' : 0.0,
+       'sigma_Jout' : 0.001,
+
+       'alpha' : 0.1*10*.5*.5*.5,
+       'alpha_rout' : 0.001,
+
+       'sigma_input' : 10.,
+       'sigma_teach' : 10.,
+       'hidden_steps' : 1,
+
+       'policy_thr_tau' : 1,
+
+       'outsig' : True,
+       'step_mode' : 'amax',
+
+       'epochs'     : 0,
+       'epochs_out' : 0,
+
+       'clump'    : False,
+       'validate' : False,
+       'feedback' : 'diagonal',
+       'verbose'  : True,
+       'rank'     : None
+}
+
+Config = {
+    'Pong-ramDeterministic-v0' : PONG_V4_PAR_I4,
+    'ButtonFood_v0' : BUTTONFOOD_V0_PAR,
+}

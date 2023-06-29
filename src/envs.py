@@ -7,6 +7,10 @@ from scipy.spatial.distance import euclidean
 from .utils import default
 from typing import Tuple, Dict
 
+
+black = (0, 0, 0) 
+white = (255, 255, 255)
+grey  = (30, 30, 30)
 class ButtonFood(Env):
     '''
         Button Food environment where an agent explore a 2D (continuous) world
@@ -16,6 +20,7 @@ class ButtonFood(Env):
 
     metadata = {
         'render_modes' : ['human', 'rgb_array'],
+        'font_size' : 30,
         'render_fps'   : 8,
         'window_size'  : (512, 512),
     }
@@ -68,9 +73,10 @@ class ButtonFood(Env):
         self.done = False 
 
         # Here we init the position of target and agent and button
-        self._agent_location  = default(init_agent, np.ones(2) * 0.5) 
+        self._agent_location  = default(init_agent, np.ones(2) * 0.5)
         self._target_location = default(init_target, self.np_random.random(2)) 
         self._button_location = default(init_button, self.np_random.random(2))
+        self._agent_velocity  = np.zeros(2) 
 
         self._target_identity = self.np_random.integers(low=1, high=45)
 
@@ -83,12 +89,11 @@ class ButtonFood(Env):
 
         if render_mode == 'human' or render_mode == 'rgb_array':
             # Load the pygame assets
-            self._target_image = pg.image.load(f'res/food_sprite_{self._target_identity}.png')
+            self._target_image = pg.image.load(f'res/cheese_sprite_1.png')
             self._button_image = pg.image.load('res/button_sprite.png')
-            self._agent_images = [
-                pg.transform.scale(pg.image.load('res/agent_sprite_1.png'), (120, 120)),
-                pg.transform.scale(pg.image.load('res/agent_sprite_2.png'), (120, 120)),
-            ]   
+            self._agent_image = pg.image.load('res/mouse_sprite_1.png')
+    
+            self._target_image = pg.transform.scale(self._target_image, (32, 32))
 
     def _get_obs(self) -> Dict[str, np.ndarray]:
         return {
@@ -113,7 +118,8 @@ class ButtonFood(Env):
 
     def step(self, action : np.ndarray | Tuple[int, int]):
         # Action is the instantaneous speed in the x- and y-direction
-        self._agent_location += np.array(action)
+        self._agent_velocity = np.array(action)
+        self._agent_location += self._agent_velocity
         self._agent_location = np.clip(
             self._agent_location, *self.domain,
         )
@@ -150,9 +156,6 @@ class ButtonFood(Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
 
-        self._target_image = pg.image.load(f'res/food_sprite_{self._target_identity}.png')
-        self._target_image = pg.transform.scale(self._target_image, (42, 42))
-
         # We will sample the target's location randomly until it does not coincide with the agent's location
         self._agent_location  = np.array(default(init_agent,  self.np_random.uniform(*self.domain, size=2)))
         self._button_location = np.array(default(init_button, self.np_random.uniform(*self.domain, size=2)))
@@ -178,24 +181,26 @@ class ButtonFood(Env):
     
         fps  = self.metadata['render_fps']
         w, h = self.metadata['window_size']
+        font_size = self.metadata['font_size']
 
         if self.window is None and self.render_mode == 'human':
             pg.init()
             pg.display.init()
             self.window = pg.display.set_mode((w, h))
-            self.text = pg.freetype.Font('res/cmunsx.ttf', 30)
+            self.text = pg.freetype.Font('res/cmunsx.ttf', font_size)
 
             self._target_image = self._target_image.convert_alpha()
             self._button_image = self._button_image.convert_alpha()
+            self._agent_image  = self._agent_image.convert_alpha()
 
-            self._agent_images[0] = self._agent_images[0].convert_alpha()
-            self._agent_images[1] = self._agent_images[1].convert_alpha()
+            # self._agent_images[0] = self._agent_images[0].convert_alpha()
+            # self._agent_images[1] = self._agent_images[1].convert_alpha()
 
         if self.clock is None and self.render_mode == 'human':
             self.clock = pg.time.Clock()
 
         canvas = pg.Surface((w, h))
-        canvas.fill((30, 30, 30))
+        canvas.fill(white)
 
         # Draw a visual grid
         for x in np.linspace(*self.domain, num_grid_lines):
@@ -216,7 +221,7 @@ class ButtonFood(Env):
 
         # If done, print winning condition
         if self.done:
-            self.text.render_to(canvas, (15, 200), "WELL DONE! ENJOY THE FOOD", (255, 255, 255))
+            self.text.render_to(canvas, (15, 256 - font_size), "WELL DONE! ENJOY THE FOOD", black)
 
         else:
             # Draw the target
@@ -226,18 +231,16 @@ class ButtonFood(Env):
             canvas.blit(targ_img, targ_loc, targ_rec)
             
             # Draw the button     
-            button_style = (2 * 32, 0, 32, 32) if self.is_button_pressed else (0 * 32, 3 * 32, 32, 32)
-            canvas.blit(
-                self._button_image,
-                self._button_location * np.array((w, h)) - np.array((16, 16)),
-                button_style,
-            )
+            button_img = self._button_image
+            button_loc = self._button_location * np.array((w, h)) - np.array((16, 16))
+            button_rec = (2 * 32, 0, 32, 32) if self.is_button_pressed else (0 * 32, 3 * 32, 32, 32)
+            canvas.blit(button_img, button_loc, button_rec)
 
-            # Draw the agent
-            agent_img = self._agent_images[int(self.time // (fps * 0.5) % 2)]
-            agent_rec = agent_img.get_rect()
-            agent_loc = self._agent_location * np.array((w, h)) - np.array(agent_rec.center),
-            canvas.blit(agent_img, agent_loc, agent_rec, )
+            # * Draw the agent
+            agent_img = self._agent_image
+            agent_rec = (int(4 * self.time // fps % 4) * 32, self._agent_heading() * 32, 32, 32)
+            agent_loc = self._agent_location * np.array((w, h)) - np.array((16, 16)),
+            canvas.blit(agent_img, agent_loc, agent_rec)
 
         if render_mode == "human":
             # The following line copies our drawings from `canvas` to the visible window
@@ -253,6 +256,16 @@ class ButtonFood(Env):
             return np.transpose(
                 np.array(pg.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
             )
+        
+    def _agent_heading(self):
+        vx, vy = self._agent_velocity
+
+        if vy > vx and vy <= -vx: return 0 # LEFT
+        if vy > vx and vy >= -vx: return 1 # DOWN
+        if vy < vx and vy >= -vx: return 2 # RIGHT
+        if vy < vx and vy <= -vx: return 7 # UP
+
+        raise ValueError('Invalid agent velocity')      
 
     def close(self):
         if self.window is not None:

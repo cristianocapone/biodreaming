@@ -4,20 +4,18 @@
     Authors: Anonymus
 """
 
-import gym
-from copy import deepcopy
-from random import randint
-import pickle
-import numpy as np
-from matplotlib import animation
-from functions import action2cat, act2cat, cat2act, save_frames_as_gif, plot_rewards, plot_dram
-from functions import import_ram, plot_planning
-import matplotlib.pyplot as plt
-import os.path
 import os
+import gym
+import os.path
+import numpy as np
+import matplotlib.pyplot as plt
+
 from tqdm import trange
-from optimizer import Adam
 from argparse import ArgumentParser
+from functions import cat2act, plot_rewards, plot_dram
+from functions import import_ram, plot_planning
+
+from src.optimizer import Adam
 
 #if_dream = 0
 
@@ -50,7 +48,6 @@ for repetitions in range(10):
     print (f'Pong: Observation space: {env.observation_space}')
     print (f'Pong: Action Meaning: {env.unwrapped.get_action_meanings()}')
 
-    from agent import BasicPongAgent
     from agent import AGEMO
     from config import PONG_V4_PAR_I4 as par
 

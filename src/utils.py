@@ -3,6 +3,7 @@
     Title: Biologically Plausible Model-Based Reinforcement Learning in Recurrent Spiking Networks
     Authors: Anonymus
 """
+import ffmpeg
 
 import numpy as np
 from functools import reduce
@@ -127,31 +128,6 @@ def read (S, J_rout, itau_ro = 0.5):
 def gaussian (x, mu = 0., sig = 1.):
     return np.exp (-np.power (x - mu, 2.) / (2 * np.power (sig, 2.)))
 
-def parityCode (N = 2, off = 10):
-    def xor(a, b): return a ^ b
-    def mask(i, T):
-        m = np.zeros (T, dtype = np.bool)
-        # Grab the binary representation
-        bin = [int(c) for c in f'{i:b}'.zfill(N)]
-
-        for t, b in enumerate (bin):
-            m [off * ( 1 + 3 * t) : off * (2 + 3 * t + b)] = True
-
-        return m
-
-    # Here we compute the total time needed for this parity code
-    T = off + 2 * N * off + (N - 1) * off + 2 * off + 3 * off + off
-    Inp = np.zeros ((2**N, T))
-    Out = np.zeros ((2**N, T))
-
-    t = np.linspace (0., 3 * off, num = 3 * off)
-    for i, (inp, out) in enumerate (zip (Inp, Out)):
-        inp[mask(i, T)] = 1
-        sgn = 2 * reduce(xor, [int(c) for c in f'{i:b}']) - 1
-        out[-4 * off : -off] = sgn * gaussian(t, mu = 1.5 * off, sig = off * 0.5)
-
-    return Inp, Out
-
 def shuffle(iter):
     rng_state = np.random.get_state()
 
@@ -161,3 +137,11 @@ def shuffle(iter):
 
     for a in range (len(iter)):
         np.random.shuffle ([0., 1.])
+
+def make_movie(savename : str, folder : str = 'frames', fps : int = 10):
+    (
+        ffmpeg
+        .input(f'{folder}/*.jpg', pattern_type = 'glob', framerate = fps)
+        .output(f'{savename}.mp4')
+        .run()
+    )
