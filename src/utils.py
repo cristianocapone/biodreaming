@@ -30,6 +30,9 @@ vals[:, 1] = np.linspace(30/256, .80, N)
 vals[:, 2] = np.linspace(30/256, .05, N)
 vscorrect_cm = ListedColormap(vals)
 
+def default(var, val):
+    return val if var is None else var
+
 def dark_theme():
     plt.style.use('dark_background')
     plt.rcParams['axes.facecolor']='#1E1E1E'
@@ -69,6 +72,30 @@ def kClock (T, K = 5):
 
     return C
 
+# def build_ktarg(
+#     dim : int = 100,
+#     num : int = 3,
+#     amp : Tuple[float, float] = (0.5, 2.0),
+#     freq : List[float] = (1, 2, 3, 5),
+# ) -> Tuple[Tensor, Tensor]:
+    
+#     a, b = amp
+
+#     # * Build input
+#     inps = torch.block_diag(*torch.ones(num, dim // num))
+    
+#     # * Build target output
+#     amps = (b - a) * torch.rand(num, 1, 1) + a
+#     freq : Tensor = torch.tensor(freq)
+#     phis = torch.rand(num, 1, len(freq)) * 2 * torch.pi
+
+#     time = torch.linspace(0, 2 * torch.pi, dim)
+#     time = time.reshape(1, dim, 1).expand(num, dim, len(freq))
+
+#     targ = amps * torch.cos(time * freq + phis)
+
+#     return inps, targ.sum(-1)
+
 def sfilter (seq, itau = 0.5):
     filt_seq = np.zeros (seq.shape)
 
@@ -76,6 +103,16 @@ def sfilter (seq, itau = 0.5):
         filt_seq [:, t] = filt_seq [:, t - 1] * itau + s * (1. - itau) if t > 0 else seq [:, 0]
 
     return filt_seq
+
+# @torch.no_grad()
+# def expfilt(seq : Tensor, itau : float) -> Tensor:
+#     out = torch.zeros_like(seq)
+    
+#     # Filter the output using readout time constant
+#     for t, v in enumerate(seq):
+#         out[t] = out[t - 1] * itau + (1 - itau) * v
+
+#     return out
 
 def dJ_rout (J_rout, targ, S_rout):
     Y = J_rout @ S_rout

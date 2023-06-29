@@ -4,7 +4,7 @@
 """
 
 import numpy as np
-import utils as ut
+import src.utils as ut
 from optimizer import Adam, SimpleGradient
 from tqdm import trange
 import random
