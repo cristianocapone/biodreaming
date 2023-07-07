@@ -199,7 +199,7 @@ BUTTONFOOD_V0_PAR = {
        'tau_ro'   : 1 * dt,
        'tau_star' : 1 * dt,
 
-       'N' : 500, 'T' : 800, 'I' : 4, 'O' : 3,
+       'N' : 500, 'T' : 800, 'I' : 50, 'O' : 2,
 
        'dv' : 0.05 , 'Vo' : -4, 'h' : -8, 's_inh' : 100,
 
@@ -218,8 +218,8 @@ BUTTONFOOD_V0_PAR = {
 
        'policy_thr_tau' : 1,
 
-       'outsig' : True,
-       'step_mode' : 'amax',
+       'outsig' : False,
+       'step_mode' : 'raw',
 
        'epochs'     : 0,
        'epochs_out' : 0,
@@ -233,5 +233,5 @@ BUTTONFOOD_V0_PAR = {
 
 Config = {
     'Pong-ramDeterministic-v0' : PONG_V4_PAR_I4,
-    'ButtonFood_v0' : BUTTONFOOD_V0_PAR,
+    'ButtonFood-v0' : BUTTONFOOD_V0_PAR,
 }

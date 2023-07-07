@@ -5,9 +5,10 @@
 import pickle
 import numpy as np
 import src.utils as ut
-from optimizer import Adam, SimpleGradient
+from .optimizer import Adam, SimpleGradient
 from tqdm import trange
-import random
+
+from .utils import default
 
 import matplotlib.pyplot as plt
 
@@ -99,47 +100,29 @@ class AGEMONE:
         self.hidden = config['hidden_steps'] if 'hidden_steps' in config else 1
 
         # This is the network connectivity matrix
-        self.J_rec = np.random.normal (0., config['sigma_Jrec'], size = (self.N, self.N))
+        self.J_rec = np.random.normal(0., config['sigma_Jrec'], size = (self.N, self.N))
         self.J_rec /= np.sqrt(self.N) # Normalize the connectivity matrix
 
-        self.J_out = np.random.normal (0., config['sigma_Jout'], size = (self.O, self.N))
+        self.J_out = np.random.normal(0., config['sigma_Jout'], size = (self.O, self.N))
 
-        # This is the network input, teach and output matrices
-        self.J_input = np.random.normal (0., config['sigma_input'], size = (self.N, self.I))
-        self.J_teach = np.random.normal (0., config['sigma_teach'], size = (self.N, self.O))
+        # This is the network input and teach matrices
+        self.J_input = np.random.normal(0., config['sigma_input'], size = (self.N, self.I))
+        self.J_teach = np.random.normal(0., config['sigma_teach'], size = (self.N, self.O))
 
         # Remove self-connections from synaptic matrix
-        np.fill_diagonal (self.J, 0.)
+        np.fill_diagonal(self.J_rec, 0.)
 
         # Impose reset after spike
         self.s_inh = -config['s_inh']
         self.J_reset = np.diag(np.ones(self.N) * self.s_inh)
 
-        # This is the external field
-        h = config['h']
-
-        assert type (h) in (np.ndarray, float, int)
-        self.h = h if isinstance (h, np.ndarray) else np.ones (self.N) * h
-
-        # Membrane potential
-        self.H = np.ones (self.N) * config['Vo']
+        # External constant field and initial membrane potential
+        self.h  = config['h']
         self.Vo = config['Vo']
 
-        # These are the spikes train and the filtered spikes train
-        self.S = np.zeros (self.N)
-        self.S_hat = np.zeros (self.N)
-
-        # This is the single-time output buffer
-        self.state_out = np.zeros (self.N)
-
-        # Check whether output should be put through a sigmoidal gate
-        self.outsig = config['outsig'] if 'outsig' in config else False
-
-        # Save the way policy should step in closed-loop scenario
-        self.step_mode = 'amax'#par['step_mode'] if 'step_mode' in par else 'UNSET'
-
-        self.dJ_filt_rec = 0
-        self.dJ_filt_out = 0
+        # Reset takes care of initializing the membrane potential and spikes
+        # and all filtered accumulators
+        self.reset()
 
         # Here we save the model configuration
         self.config = config
@@ -192,7 +175,7 @@ class AGEMONE:
 
         return action, out
 
-    def learn (self, reward : float, alpha_J : float = 0.01):
+    def learn(self, reward : float, alpha_J : float = 0.01):
         dJ = np.outer ((self.S - self.lam), self.dH)
 
         self.dJ_filt_rec = self.dJ_filt_rec * (1 - alpha_J) + alpha_J * dJ
@@ -247,20 +230,22 @@ class AGEMONE:
         self.dJ_out_s_aggregate = 0
         self.dJ_aggregate = 0
 
-    def policy(self, state, mode : str = 'amax', explore = False):
+    def policy(self, state, mode : str | None = None):
+        mode = default(mode, self.config['step_mode'])
+        
         self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
 
-        out = self.Jout @ self.state_out*10.*.5
-        if self.config['outsig']:
-            out = np.exp(out) / np.sum(np.exp(out))
+        p_out = self.J_out @ self.state_out
+        if self.config['outsig']: p_out = np.exp(p_out) / np.sum(np.exp(p_out))
+        
+        match mode:
+            case 'amax': action = np.argmax(p_out)
+            case 'prob': action = int(np.random.choice(len(p_out), p = p_out))
+            case 'raw' : action = p_out
+        
+        # self.prob = p_out
 
-        prob = out
-        self.prob = prob
-
-        action = np.random.choice(len(out), p = prob)
-        #action = random.choices( population=[0, 1, 2],weights=out,k=1)
-
-        return int(action), out
+        return action, p_out
 
     def prediction(self):
         s_pred = self.J_out_s_pred @ self.state_out
@@ -268,13 +253,17 @@ class AGEMONE:
         return s_pred,r_pred
 
 
-    def reset(self, init = None):
-        self.S = init if init is not None else np.zeros (self.N)
-        self.S_hat = self.S [:] * self.itau_s if init is not None else np.zeros (self.N)
+    def reset(self, spikes : np.ndarray | None = None):
+        self.S     = default(spikes, np.zeros(self.N))
+        self.S_hat = default(spikes, np.zeros(self.N)) * self.itau_s
 
-        self.state_out *= 0
+        self.state_out = np.zeros (self.N)
 
-        self.H = self.Vo
+        self.H  = np.ones(self.N) * self.Vo
+        self.dH = np.zeros(self.N)
+
+        self.dJ_filt_rec = 0
+        self.dJ_filt_out = 0
 
     def forget(self, J_rec : np.ndarray | None = None, J_out  : np.ndarray | None = None):
         self.J_rec = np.random.normal(0., self.config['sigma_Jrec'], size = (self.N, self.N)) if J_rec is None else J_rec.copy()
@@ -291,7 +280,7 @@ class AGEMONE:
         }
 
         with open(filename, 'wb') as f:
-            pickle.dump(bundle)
+            pickle.dump(bundle, f)
 
     @classmethod
     def load(cls, filename):
@@ -514,6 +503,7 @@ class AGEMO:
     def policy (self, state, mode = 'amax', explore = False):
         self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
 
+        # ! WHY THE * 10. * .5??
         out = self.Jout @ self.state_out*10.*.5
         if self.outsig:
             #out = self._sigm(out,0.1)+0.00001

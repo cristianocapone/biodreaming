@@ -4,13 +4,15 @@ from gym import Env
 from gym import spaces
 from scipy.spatial.distance import euclidean
 
-from .utils import default
-from typing import Tuple, Dict
-
+from typing import Tuple, Dict, Any
 
 black = (0, 0, 0) 
 white = (255, 255, 255)
 grey  = (30, 30, 30)
+
+def default(var, val):
+    return val if var is None else var
+
 class ButtonFood(Env):
     '''
         Button Food environment where an agent explore a 2D (continuous) world
@@ -21,7 +23,7 @@ class ButtonFood(Env):
     metadata = {
         'render_modes' : ['human', 'rgb_array'],
         'font_size' : 30,
-        'render_fps'   : 8,
+        'render_fps'   : 24,
         'window_size'  : (512, 512),
     }
 
@@ -52,9 +54,11 @@ class ButtonFood(Env):
         # the target and the food location in the 2D world
         self.observation_space = spaces.Dict(
             {
+                'agent_target' : spaces.Box(*domain, shape=(2 * input_dim,), dtype=float),
+                'agent_button' : spaces.Box(*domain, shape=(2 * input_dim,), dtype=float),
                 'agent' : spaces.Box(*domain, shape=(2,), dtype=float),
                 'target': spaces.Box(*domain, shape=(2,), dtype=float),
-                'food'  : spaces.Box(*domain, shape=(2,), dtype=float),
+                'button': spaces.Box(*domain, shape=(2,), dtype=float),
             }
         )
 
@@ -118,6 +122,7 @@ class ButtonFood(Env):
 
     def step(self, action : np.ndarray | Tuple[int, int]):
         # Action is the instantaneous speed in the x- and y-direction
+        print(action)
         self._agent_velocity = np.array(action)
         self._agent_location += self._agent_velocity
         self._agent_location = np.clip(
@@ -137,6 +142,7 @@ class ButtonFood(Env):
 
         # Timekeeping for out-of-time-limit control
         self.time += 1
+        self.truncated = self.time > self.time_limit
 
         obs = self._get_obs()
         info = self._get_info()
@@ -144,7 +150,7 @@ class ButtonFood(Env):
         if self.render_mode == 'human':
             self.render()
 
-        return obs, reward, self.done, info 
+        return obs, reward, self.done, self.truncated, info 
 
     def reset(
         self,
@@ -152,9 +158,12 @@ class ButtonFood(Env):
         init_agent  : np.ndarray | None = None,
         init_target : np.ndarray | None = None,
         init_button : np.ndarray | None = None,
+        options : Any = None,
     ):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
+
+        options = default(options, {'button_pressed' : False})
 
         # We will sample the target's location randomly until it does not coincide with the agent's location
         self._agent_location  = np.array(default(init_agent,  self.np_random.uniform(*self.domain, size=2)))
@@ -166,7 +175,7 @@ class ButtonFood(Env):
         while euclidean(self._button_location, self._target_location) < self._button_radius:
             self._target_location = self.np_random.uniform(*self.domain, size=2)
 
-        self.is_button_pressed = False 
+        self.is_button_pressed = options['button_pressed'] 
         self.time = 0
         self.done = False
 
@@ -280,6 +289,9 @@ class ButtonFood(Env):
         domain : Tuple[float, float] = (0, 1),
     ) -> np.ndarray:
         
+        pos = np.array(pos)
+        shape = pos.shape
+        
         x, y = pos 
         l, r = domain
         b, t = domain
@@ -291,8 +303,8 @@ class ButtonFood(Env):
         y = np.clip(y, b, b + h)
 
         # Bring position to a common encoding of [time, batch, dim]
-        x = np.atleast_3d(x).transpose(1, 2, 0)
-        y = np.atleast_3d(y).transpose(1, 2, 0)
+        # x = np.atleast_3d(x).transpose(1, 2, 0)
+        # y = np.atleast_3d(y).transpose(1, 2, 0)
 
         mux = np.linspace(l, l + w, dim)
         muy = np.linspace(b, b + h, dim)
