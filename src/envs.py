@@ -36,9 +36,10 @@ class ButtonFood(Env):
         render_mode : str | None = None,
         input_dim : int = 25,
         time_limit : int = 500,
-        max_speed : float = 1.,
+        max_speed : float = .01,
         target_radius : float = 0.025,
         button_radius : float = 0.040,
+        num_actions : int = 8,
     ) -> None:
         super(ButtonFood, self).__init__() 
 
@@ -48,7 +49,10 @@ class ButtonFood(Env):
 
         # The action space corresponds to the instantaneous speed in the 2D world
         # along the x- and y-direction.
-        self.action_space = spaces.Box(-max_speed, max_speed, shape=(2,), dtype=float)
+        self.max_speed = max_speed
+        self.discrete_action_space = num_actions > 0
+        self.action_space = spaces.Discrete(num_actions) if num_actions > 0 else\
+            spaces.Box(-max_speed, max_speed, shape=(2,), dtype=float)
 
         # The observation space corresponds to the (x, y) coordinates for the agent,
         # the target and the food location in the 2D world
@@ -63,7 +67,6 @@ class ButtonFood(Env):
         )
 
         self.reward_range = spaces.Box(0, 1 / self._target_radius, shape=(1,), dtype=float)
-        # self.spec         =    # An environment spec that contains the information used to initialise the environment from gym.make
         
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -121,9 +124,25 @@ class ButtonFood(Env):
         }
 
     def step(self, action : np.ndarray | Tuple[int, int]):
+        if self.discrete_action_space:
+            assert self.action_space.contains(
+                action
+            ), f"{action!r} ({type(action)}) invalid"
+
+            theta = np.linspace(0, 2 * np.pi, num = self.action_space.n, endpoint = False)
+            self._agent_velocity = np.array(
+                                    [np.cos(theta[action]), np.sin(theta[action])]
+                                ) * self.max_speed
+
+            # match action:
+            #     case 0: self._agent_velocity = np.array([+1, 0]) * self.max_speed
+            #     case 1: self._agent_velocity = np.array([-1, 0]) * self.max_speed
+            #     case 2: self._agent_velocity = np.array([0, +1]) * self.max_speed
+            #     case 3: self._agent_velocity = np.array([0, -1]) * self.max_speed
+        else:
+            self._agent_velocity = np.array(action).clip(-self.max_speed, self.max_speed)
+
         # Action is the instantaneous speed in the x- and y-direction
-        print(action)
-        self._agent_velocity = np.array(action)
         self._agent_location += self._agent_velocity
         self._agent_location = np.clip(
             self._agent_location, *self.domain,
@@ -172,7 +191,8 @@ class ButtonFood(Env):
 
         self._target_identity = self.np_random.integers(0, 40, size=(2,))
 
-        while euclidean(self._button_location, self._target_location) < self._button_radius:
+        while euclidean(self._button_location, self._target_location) < self._button_radius and\
+              euclidean(self._agent_location,  self._target_location) < 0.2:
             self._target_location = self.np_random.uniform(*self.domain, size=2)
 
         self.is_button_pressed = options['button_pressed'] 
@@ -192,7 +212,7 @@ class ButtonFood(Env):
         w, h = self.metadata['window_size']
         font_size = self.metadata['font_size']
 
-        if self.window is None and self.render_mode == 'human':
+        if self.window is None:
             pg.init()
             pg.display.init()
             self.window = pg.display.set_mode((w, h))
@@ -201,9 +221,6 @@ class ButtonFood(Env):
             self._target_image = self._target_image.convert_alpha()
             self._button_image = self._button_image.convert_alpha()
             self._agent_image  = self._agent_image.convert_alpha()
-
-            # self._agent_images[0] = self._agent_images[0].convert_alpha()
-            # self._agent_images[1] = self._agent_images[1].convert_alpha()
 
         if self.clock is None and self.render_mode == 'human':
             self.clock = pg.time.Clock()
@@ -274,7 +291,8 @@ class ButtonFood(Env):
         if vy < vx and vy >= -vx: return 2 # RIGHT
         if vy < vx and vy <= -vx: return 7 # UP
 
-        raise ValueError('Invalid agent velocity')      
+        return 0
+        # raise ValueError('Invalid agent velocity')      
 
     def close(self):
         if self.window is not None:

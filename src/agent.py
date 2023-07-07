@@ -120,12 +120,16 @@ class AGEMONE:
         self.h  = config['h']
         self.Vo = config['Vo']
 
+        self.adam_rec = Adam(alpha=config['alpha_rec'])
+        self.adam_out = Adam(alpha=config['alpha_out'])
+
+        # Here we save the model configuration
+        self.config = config
+
         # Reset takes care of initializing the membrane potential and spikes
         # and all filtered accumulators
         self.reset()
 
-        # Here we save the model configuration
-        self.config = config
 
     def _sigm (self, x, dv = None):
         if dv is None:
@@ -168,19 +172,47 @@ class AGEMONE:
         self.S = np.heaviside(self.lam - (0.5 if deterministic else np.random.rand(self.N)), 0)
 
         # Here we return the chosen next action
-        action, out = self.policy(self.S)
+        action, p_out = self.policy(self.S)
 
-        self.out = out
+        self.p_out = p_out
         self.action = action
 
-        return action, out
+        return action, p_out
 
-    def learn(self, reward : float, alpha_J : float = 0.01):
-        dJ = np.outer ((self.S - self.lam), self.dH)
+    def learn(self, reward : float, lr : float = 0.1, alpha_J : float = 0.01):
+        dJ = np.outer((self.S - self.lam), self.dH)
 
         self.dJ_filt_rec = self.dJ_filt_rec * (1 - alpha_J) + alpha_J * dJ
 
-        self.J += reward * self.dJ_filt_rec
+        self.J += lr * reward * self.dJ_filt_rec
+
+    def accumulate_evidence(self, reward : float, alpha_J : float = 0.01):
+        # From last action (int) compute the action vector and its difference
+        # with the probability vector
+        act_vec = np.zeros(self.O)
+        act_vec[self.action] = 1
+        act_diff = act_vec - self.p_out
+
+        pseudo = self._dsigm(self.H, dv = 1.)
+        
+        # Compute the synaptic matrix gradient for recurrent and output connections
+        dJ_rec = np.outer(self.J_out.T @ act_diff * pseudo, self.dH)
+        dJ_out = np.outer(act_diff, self.state_out.T)
+
+        # Accumulate the gradient evidence
+        self.dJ_filt_rec = self.dJ_filt_rec * (1 - alpha_J) + dJ_rec
+        self.dJ_filt_out = self.dJ_filt_out * (1 - alpha_J) + dJ_out
+
+        self.dJ_rec_accumulate += reward * self.dJ_filt_rec
+        self.dJ_out_accumulate += reward * self.dJ_filt_out
+
+    def learn_from_evidence(self):
+        self.J_rec = self.adam_rec.step(self.J_rec, self.dJ_rec_accumulate)
+        self.J_out = self.adam_out.step(self.J_out, self.dJ_out_accumulate)
+
+        np.fill_diagonal(self.J_rec, 0)
+        self.dJ_rec_accumulate = 0
+        self.dJ_out_accumulate = 0
 
     def learn_error(self, reward : float, alpha_J : float = 0.002, lambda_entropy : float = 0.001):
         ac_vector = np.zeros((3,))
@@ -232,7 +264,7 @@ class AGEMONE:
 
     def policy(self, state, mode : str | None = None):
         mode = default(mode, self.config['step_mode'])
-        
+
         self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
 
         p_out = self.J_out @ self.state_out
@@ -264,6 +296,9 @@ class AGEMONE:
 
         self.dJ_filt_rec = 0
         self.dJ_filt_out = 0
+
+        self.dJ_rec_accumulate = 0
+        self.dJ_out_accumulate = 0
 
     def forget(self, J_rec : np.ndarray | None = None, J_out  : np.ndarray | None = None):
         self.J_rec = np.random.normal(0., self.config['sigma_Jrec'], size = (self.N, self.N)) if J_rec is None else J_rec.copy()
