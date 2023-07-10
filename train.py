@@ -9,7 +9,7 @@ from tqdm import trange
 from argparse import ArgumentParser
 from argparse import Namespace
 
-from src.agent import AGEMONE
+from src.agent import Actor, Planner
 from src.config import Config
 
 from collections import defaultdict
@@ -23,8 +23,8 @@ def main(args : Namespace):
         num_actions = args.num_actions,
     )
 
-    agent   = AGEMONE(Config[args.env])
-    planner = AGEMONE(Config[args.env])
+    agent   = Actor  (Config[args.env])
+    planner = Planner(Config[args.env])
 
     stats = defaultdict(list)
 
@@ -47,17 +47,21 @@ def main(args : Namespace):
 
             while not done and not timeout:
                 # * Agent action
-                action, out = agent.step(obs['agent_target'], deterministic = True)
+                action = agent.step(obs['agent_target'], deterministic = True)
 
-                # * Planner action
-                # planner_obs = np.concatenate((action, obs['agent_target']))
-                # _ = planner.step(planner_obs, deterministic = True)
+                # * Planner action: prediction of next env state
+                # Convert action to one-hot for concatenation with the observation
+                planner_obs = np.concatenate((np.eye(args.num_actions)[action], obs['agent_target']))
+                pred_state, pred_reward = planner.step(planner_obs, deterministic = True)
 
                 # * Environment step
                 obs, r_fin, done, timeout, info = env.step(action)
 
-                # Update agents using the reward signal
+                # Update agents using the reward signal and planner using the prediction to
+                # the next environment state and reward
                 agent.accumulate_evidence(r_fin)
+                planner.accumulate_evidence((pred_state, pred_reward), (obs['agent_target'], r_fin))
+                planner.learn_from_evidence()
 
                 r_tot += r_fin
 
@@ -67,30 +71,29 @@ def main(args : Namespace):
             reward_fin.append(r_fin)
 
             iterator.set_description(f'Episode reward {r_fin:.2f}')
+ 
+            # * §§§ Dreaming phase §§§
+            for _ in range(args.num_dream):
+                agent.reset()
+                planner.reset()
+
+                obs, info = env.reset(options = {'button_pressed' : True})
+                obs = obs['agent_target']
+
+                for dream_t in range(args.dream_len):
+                    # * Agent action
+                    action = agent.step(obs, deterministic = True)
+
+                    # * Planner predicts the new observation
+                    planner_obs = np.concatenate((action, obs))
+                    obs, reward = planner.step(planner_obs, deterministic = True)
+                    
+                    agent.accumulate_evidence(reward)
+
+                agent.learn_from_evidence()
 
         stats['reward_tot'].append(reward_tot)
         stats['reward_fin'].append(reward_fin) 
-
-            # * §§§ Dreaming phase §§§
-            # for _ in range(args.num_dream):
-            #     agent.reset()
-            #     planner.reset()
-
-            #     obs, info = env.reset(options = {'button_pressed' : True})
-
-            #     for dream_t in range(args.dream_len):
-            #         # * Agent action
-            #         action, out = agent.step(obs['agent_target'], deterministic = True)
-
-            #         # * Planner predicts the new observation
-            #         _, _ = planner.step(obs, deterministic = True)
-            #         Δ_obs_pred, r_pred = planner.prediction()
-
-            #         obs += Δ_obs_pred
-
-            #         agent.accumulate_error(r_pred)
-
-            #     agent.update_J()
         
         # * Save agent
         agent.save(path.join(args.save_dir, f'agent_{args.env}_{str(rep).zfill(2)}.pkl'))
@@ -121,30 +124,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     main(args)
-
-# env = ButtonFood(
-#     render_mode='human'
-# )
-
-# imgs = []
-# obs, info = env.reset(init_agent=(0.5, 0.5), init_button=(0.5, 0.9), init_target=(0.8, 0.3))
-
-# for i in range(50):
-#     if i < 12: action = (0.00, +0.03)
-#     else:      action = (0.01, -0.02)
-
-#     obs, r, done, info = env.step(action)
-
-#     frame = env.render(render_mode = 'rgb_array')
-
-#     imgs.append(Image.fromarray(frame))
-
-#     # if done:
-#     #     break
-
-# env.close()
-
-# for f, img in enumerate(imgs):
-#     img.save(f'frames/render_example_{str(f).zfill(2)}.jpg')
-
-# # imgs[0].save('render_example.gif', save_all=True, append_images=imgs[1:], fps=8, loop=0)

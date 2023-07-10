@@ -39,10 +39,7 @@ def main(args):
             action, out = agent.step(obs['agent_target'], deterministic = True)
 
             # * Environment step
-            # obs, r_fin, done, timeout, info = env.step(action)
-            env._button_location = np.array((0.5, 0.5))
-            env._target_location = np.array((0., 0.))
-            env._agent_location  = np.array((0., 0.))
+            obs, r_fin, done, timeout, info = env.step(action)
 
             frame = env.render(render_mode = args.render_mode)
             

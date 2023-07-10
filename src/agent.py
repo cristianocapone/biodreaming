@@ -4,13 +4,13 @@
 """
 import pickle
 import numpy as np
-import src.utils as ut
-from .optimizer import Adam, SimpleGradient
 from tqdm import trange
+from abc import abstractclassmethod
 
 from .utils import default
+from .optimizer import Adam
 
-import matplotlib.pyplot as plt
+from typing import Tuple
 
 class BasicPongAgent:
     ball_Yrange = (46, 205)
@@ -103,12 +103,6 @@ class AGEMONE:
         self.J_rec = np.random.normal(0., config['sigma_Jrec'], size = (self.N, self.N))
         self.J_rec /= np.sqrt(self.N) # Normalize the connectivity matrix
 
-        self.J_out = np.random.normal(0., config['sigma_Jout'], size = (self.O, self.N))
-
-        # This is the network input and teach matrices
-        self.J_input = np.random.normal(0., config['sigma_input'], size = (self.N, self.I))
-        self.J_teach = np.random.normal(0., config['sigma_teach'], size = (self.N, self.O))
-
         # Remove self-connections from synaptic matrix
         np.fill_diagonal(self.J_rec, 0.)
 
@@ -120,8 +114,8 @@ class AGEMONE:
         self.h  = config['h']
         self.Vo = config['Vo']
 
+        # Recurrent matrix optimizer
         self.adam_rec = Adam(alpha=config['alpha_rec'])
-        self.adam_out = Adam(alpha=config['alpha_out'])
 
         # Here we save the model configuration
         self.config = config
@@ -129,7 +123,6 @@ class AGEMONE:
         # Reset takes care of initializing the membrane potential and spikes
         # and all filtered accumulators
         self.reset()
-
 
     def _sigm (self, x, dv = None):
         if dv is None:
@@ -172,19 +165,84 @@ class AGEMONE:
         self.S = np.heaviside(self.lam - (0.5 if deterministic else np.random.rand(self.N)), 0)
 
         # Here we return the chosen next action
-        action, p_out = self.policy(self.S)
+        return self.policy(self.S)   
 
+    @abstractclassmethod
+    def policy(self, state : np.ndarray, **kwargs):
+        pass
+
+    def reset(self, spikes : np.ndarray | None = None):
+        self.S     = default(spikes, np.zeros(self.N))
+        self.S_hat = default(spikes, np.zeros(self.N)) * self.itau_s
+
+        self.state_out = np.zeros(self.N)
+
+        self.H  = np.ones (self.N) * self.Vo
+        self.dH = np.zeros(self.N)
+
+    def forget(self, J_rec : np.ndarray | None = None, J_out  : np.ndarray | None = None):
+        self.J_rec = np.random.normal(0., self.config['sigma_Jrec'], size = (self.N, self.N)) if J_rec is None else J_rec.copy()
+        self.J_out = np.random.normal(0., self.config['sigma_Jout'], size = (self.O, self.N)) if J_out is None else J_out.copy()
+
+    def save (self, filename):
+        # Here we collect the relevant quantities to store
+        bundle = {name : value for name, value in self.parameters()}
+
+        with open(filename, 'wb') as f:
+            pickle.dump(bundle, f)
+
+    @classmethod
+    def load(cls, filename):
+        with open(filename, 'rb') as f:
+            bundle = pickle.load(f)
+
+        obj = cls(bundle['config'])
+
+        for name, value in bundle:
+            setattr(obj, name, value)
+
+        return obj
+
+class Actor(AGEMONE):
+
+    def __init__(self, config):
+        # Agent has a single J_out for action prediction
+        self.J_out = np.random.normal(0., config['sigma_Jout'], size = (config['O'], config['N']))
+ 
+        self.adam_out = Adam(alpha=config['alpha_out'])
+
+        # This is the network input and teach matrices
+        self.J_input = np.random.normal(0., config['sigma_input'], size = (config['N'], config['I']))
+        self.J_teach = np.random.normal(0., config['sigma_teach'], size = (config['N'], config['O']))
+
+        super().__init__(config)
+
+        # Configure Actor parameters
+        self.parameters = {
+            'J_input' : self.J_input,
+            'J_teach' : self.J_teach,
+            'J_out' : self.J_out,
+            'J_rec' : self.J_rec,
+            'config' : self.config,
+        }
+
+    def policy(self, state : np.ndarray, mode : str | None = None):
+        mode = default(mode, self.config['step_mode'])
+
+        self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
+
+        p_out = self.J_out @ self.state_out
+        if self.config['outsig']: p_out = np.exp(p_out) / np.sum(np.exp(p_out))
+        
+        match mode:
+            case 'amax': action = np.argmax(p_out)
+            case 'prob': action = int(np.random.choice(len(p_out), p = p_out))
+            case 'raw' : action = p_out
+        
         self.p_out = p_out
         self.action = action
 
-        return action, p_out
-
-    def learn(self, reward : float, lr : float = 0.1, alpha_J : float = 0.01):
-        dJ = np.outer((self.S - self.lam), self.dH)
-
-        self.dJ_filt_rec = self.dJ_filt_rec * (1 - alpha_J) + alpha_J * dJ
-
-        self.J += lr * reward * self.dJ_filt_rec
+        return action
 
     def accumulate_evidence(self, reward : float, alpha_J : float = 0.01):
         # From last action (int) compute the action vector and its difference
@@ -214,85 +272,8 @@ class AGEMONE:
         self.dJ_rec_accumulate = 0
         self.dJ_out_accumulate = 0
 
-    def learn_error(self, reward : float, alpha_J : float = 0.002, lambda_entropy : float = 0.001):
-        ac_vector = np.zeros((3,))
-        ac_vector[self.action] = 1
-        dJ_rec = np.outer(self.J_out.T @ (ac_vector - self.out) * self._dsigm(self.H, dv = 1.), self.dH)
-
-        self.entropy = - np.sum(self.prob*np.log(self.prob))
-
-        dJ_ent_rec = - np.outer(self.J_out.T @ (self.prob * np.log(self.prob) + self.entropy)*self._dsigm (self.H, dv = 1.), self.dH)
-        dJ_ent_out = - np.outer(self.prob * np.log(self.prob) + self.entropy, self.state_out.T)
-
-        dJ_out =  np.outer((ac_vector - self.out), self.state_out.T)
-        self.dJ_filt_rec = self.dJ_filt_rec * (1 - alpha_J) + dJ_rec
-        self.dJ_filt_out = self.dJ_filt_out * (1 - alpha_J) + dJ_out
-
-        self.dJ_rec_aggregate += (reward * self.dJ_filt_rec + lambda_entropy * dJ_ent_rec * 0)
-        self.dJ_out_aggregate += (reward * self.dJ_filt_out + lambda_entropy * dJ_ent_out * 0)
-
-    def update_J(self, r):
-
-        self.J = self.adam_rec.step(self.J, self.dJ_rec_aggregate)
-        np.fill_diagonal (self.J, 0.)
-
-        self.J_out = self.adam_out.step(self.J_out, self.dJ_out_aggregate)
-        self.J_out = self.J_out + self.config['alpha_rout'] * self.dJ_out_aggregate
-
-        self.dJ_rec_aggregate = 0
-        self.dJ_out_aggregate = 0
-
-    def learn_model(self, s_pred, r_pred, state, reward, eta_rec_r : float = 0.5):
-
-        self.dJ_out_s_aggregate += np.outer(state  - s_pred, self.state_out)
-        self.dJ_out_r_aggregate += np.outer(reward - r_pred, self.state_out)
-
-        dJ_s = np.outer (self.J_out_s_pred.T @ (state  - s_pred) * self._dsigm(self.H, dv = 1.), self.dH)
-        dJ_r = np.outer (self.J_out_r_pred.T @ (reward - r_pred) * self._dsigm(self.H, dv = 1.), self.dH)
-
-        self.dJ_aggregate += dJ_s
-        self.dJ_aggregate += dJ_r * eta_rec_r
-
-    def model_update(self):
-        self.J = self.adam_rec.step(self.J, self.dJ_aggregate)
-        self.J_out_s_pred = self.adam_out_s.step(self.J_out_s_pred, self.dJ_out_s_aggregate)
-        self.J_out_r_pred = self.adam_out_r.step(self.J_out_r_pred, self.dJ_out_r_aggregate)
-
-        self.dJ_out_r_aggregate = 0
-        self.dJ_out_s_aggregate = 0
-        self.dJ_aggregate = 0
-
-    def policy(self, state, mode : str | None = None):
-        mode = default(mode, self.config['step_mode'])
-
-        self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
-
-        p_out = self.J_out @ self.state_out
-        if self.config['outsig']: p_out = np.exp(p_out) / np.sum(np.exp(p_out))
-        
-        match mode:
-            case 'amax': action = np.argmax(p_out)
-            case 'prob': action = int(np.random.choice(len(p_out), p = p_out))
-            case 'raw' : action = p_out
-        
-        # self.prob = p_out
-
-        return action, p_out
-
-    def prediction(self):
-        s_pred = self.J_out_s_pred @ self.state_out
-        r_pred = self.J_out_r_pred @ self.state_out
-        return s_pred,r_pred
-
-
     def reset(self, spikes : np.ndarray | None = None):
-        self.S     = default(spikes, np.zeros(self.N))
-        self.S_hat = default(spikes, np.zeros(self.N)) * self.itau_s
-
-        self.state_out = np.zeros (self.N)
-
-        self.H  = np.ones(self.N) * self.Vo
-        self.dH = np.zeros(self.N)
+        super().reset(spikes)
 
         self.dJ_filt_rec = 0
         self.dJ_filt_out = 0
@@ -300,36 +281,69 @@ class AGEMONE:
         self.dJ_rec_accumulate = 0
         self.dJ_out_accumulate = 0
 
-    def forget(self, J_rec : np.ndarray | None = None, J_out  : np.ndarray | None = None):
-        self.J_rec = np.random.normal(0., self.config['sigma_Jrec'], size = (self.N, self.N)) if J_rec is None else J_rec.copy()
-        self.J_out = np.random.normal(0., self.config['sigma_Jout'], size = (self.O, self.N)) if J_out is None else J_out.copy()
+class Planner(AGEMONE):
 
-    def save (self, filename):
-        # Here we collect the relevant quantities to store
-        bundle = {
+    def __init__(self, config):
+        # Planner needs additional parameters for state prediction
+        self.J_out_s = np.zeros((config['I'], config['N']))
+        self.J_out_r = np.zeros((1, config['N']))
+
+        # Each output matrix has its own optimizer
+        self.adam_out_s = Adam(alpha=config['alpha_out'])
+        self.adam_out_r = Adam(alpha=config['alpha_out'])
+
+        # This is the network input and teach matrices
+        self.J_input = np.random.normal(0., config['sigma_input'], size = (config['N'], config['I'] + config['O']))
+
+        super().__init__(config)
+
+        # Configure Actor parameters
+        self.parameters = {
             'J_input' : self.J_input,
-            'J_teach' : self.J_teach,
-            'J_out' : self.J_out,
-            'J_rec' : self.J_rec,
+            'J_out_s' : self.J_out_s,
+            'J_out_r' : self.J_out_r,
+            'J_rec'  : self.J_rec,
             'config' : self.config,
         }
 
-        with open(filename, 'wb') as f:
-            pickle.dump(bundle, f)
+    def policy(self, state : np.ndarray):
+        self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
 
-    @classmethod
-    def load(cls, filename):
-        with open(filename, 'rb') as f:
-            bundle = pickle.load(f)
+        next_state  = self.J_out_s @ self.state_out
+        next_reward = self.J_out_r @ self.state_out
 
-        obj = cls(bundle['config'])
+        return next_state, next_reward
 
-        obj.J_input = bundle['J_input']
-        obj.J_teach = bundle['J_teach']
-        obj.J_out = bundle['J_out']
-        obj.J_rec = bundle['J_rec']
+    def accumulate_evidence(self, pred : Tuple[np.ndarray, float], targ  : Tuple[np.ndarray, float], eta_rec_r : float = 0.5):
+        s_pred, r_pred = pred
+        s_targ, r_targ = targ
 
-        return obj
+        dJ_s = np.outer(self.J_out_s.T @ (s_targ - s_pred) * self._dsigm(self.H, dv = 1.), self.dH)
+        dJ_r = np.outer(self.J_out_r.T @ (r_targ - r_pred) * self._dsigm(self.H, dv = 1.), self.dH)
+
+        self.dJ_out_s_accumulate += np.outer(s_targ - s_pred, self.state_out)
+        self.dJ_out_r_accumulate += np.outer(r_targ - r_pred, self.state_out)
+
+        self.dJ_rec_accumulate += dJ_s
+        self.dJ_rec_accumulate += dJ_r * eta_rec_r
+
+    def learn_from_evidence(self):
+        self.J_rec = self.adam_rec.step(self.J_rec, self.dJ_rec_accumulate)
+        self.J_out_s = self.adam_out_s.step(self.J_out_s, self.dJ_out_s_accumulate)
+        self.J_out_r = self.adam_out_r.step(self.J_out_r, self.dJ_out_r_accumulate)
+
+        np.fill_diagonal(self.J_rec, 0)
+
+        self.dJ_out_r_accumulate = 0
+        self.dJ_out_s_accumulate = 0
+        self.dJ_rec_accumulate = 0
+
+    def reset(self, spikes : np.ndarray | None = None):
+        super().reset(spikes)
+
+        self.dJ_rec_accumulate = 0
+        self.dJ_out_s_accumulate = 0
+        self.dJ_out_r_accumulate = 0
 
 class AGEMO:
 
@@ -489,7 +503,7 @@ class AGEMO:
 
         self.entropy = - np.sum(self.prob*np.log(self.prob))
 
-        dJ_ent = - np.outer (self.Jout.T@(self.prob*np.log(self.prob ) + self.entropy)*self._dsigm (self.H, dv = 1.), self.dH)
+        dJ_ent = - np.outer (self.Jout.T@( self.prob*np.log(self.prob ) + self.entropy)*self._dsigm (self.H, dv = 1.), self.dH)
         dJ_ent_out = - np.outer (  self.prob*np.log(self.prob ) + self.entropy , self.state_out.T)
 
         dJ_out =  np.outer((ac_vector - self.out), self.state_out.T)
