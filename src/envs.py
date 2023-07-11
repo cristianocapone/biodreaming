@@ -191,7 +191,7 @@ class ButtonFood(Env):
 
         self._target_identity = self.np_random.integers(0, 40, size=(2,))
 
-        while euclidean(self._button_location, self._target_location) < self._button_radius and\
+        while euclidean(self._button_location, self._target_location) < self._button_radius or\
               euclidean(self._agent_location,  self._target_location) < 0.2:
             self._target_location = self.np_random.uniform(*self.domain, size=2)
 

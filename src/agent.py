@@ -4,13 +4,12 @@
 """
 import pickle
 import numpy as np
-from tqdm import trange
 from abc import abstractclassmethod
 
 from .utils import default
 from .optimizer import Adam
 
-from typing import Tuple
+from typing import Tuple, Dict, Any, Callable
 
 class BasicPongAgent:
     ball_Yrange = (46, 205)
@@ -84,9 +83,9 @@ class BasicPongAgent:
 
 class AGEMONE:
 
-    def __init__ (self, config):
+    def __init__ (self, config : Dict[str, Any]):
         # This are the network size N, input I, output O and max temporal span T
-        self.N, self.I, self.O, self.T = config['N'], config['I'], config['O'], config['T']
+        self.N, self.I, self.O = config['N'], config['I'], config['O']
 
         self.dt = config['dt']
 
@@ -120,11 +119,14 @@ class AGEMONE:
         # Here we save the model configuration
         self.config = config
 
+        # Callback for arbitrary quantity recording from agents
+        self.step_callback = None
+
         # Reset takes care of initializing the membrane potential and spikes
         # and all filtered accumulators
         self.reset()
 
-    def _sigm (self, x, dv = None):
+    def _sigm (self, x : np.ndarray, dv : float = None) -> np.ndarray:
         if dv is None:
             dv = self.dv
 
@@ -144,10 +146,10 @@ class AGEMONE:
 
         return out
 
-    def _dsigm (self, x, dv = None):
+    def _dsigm (self, x : np.ndarray, dv : float = None) -> np.ndarray:
         return self._sigm (x, dv = dv) * (1. - self._sigm (x, dv = dv))
 
-    def step(self, inp : np.ndarray, deterministic : bool = False):
+    def step(self, inp : np.ndarray, deterministic : bool = False, **kwd) -> Any:
         itau_m = self.itau_m
         itau_s = self.itau_s
 
@@ -165,10 +167,21 @@ class AGEMONE:
         self.S = np.heaviside(self.lam - (0.5 if deterministic else np.random.rand(self.N)), 0)
 
         # Here we return the chosen next action
-        return self.policy(self.S)   
+        out = self.policy(self.S)
+
+        if self.step_callback:
+            self.step_callback(self, **kwd)
+
+        return out
+
+    def register_step_callback(self, fn : Callable) -> None:
+        self.step_callback = fn
+
+    def unregister_step_callback(self) -> None:
+        self.step_callback = None 
 
     @abstractclassmethod
-    def policy(self, state : np.ndarray, **kwargs):
+    def policy(self, state : np.ndarray, **kwargs) -> Any:
         pass
 
     def reset(self, spikes : np.ndarray | None = None):
@@ -184,15 +197,15 @@ class AGEMONE:
         self.J_rec = np.random.normal(0., self.config['sigma_Jrec'], size = (self.N, self.N)) if J_rec is None else J_rec.copy()
         self.J_out = np.random.normal(0., self.config['sigma_Jout'], size = (self.O, self.N)) if J_out is None else J_out.copy()
 
-    def save (self, filename):
+    def save (self, filename : str):
         # Here we collect the relevant quantities to store
-        bundle = {name : value for name, value in self.parameters()}
+        bundle = {name : value for name, value in self.parameters.items()}
 
         with open(filename, 'wb') as f:
             pickle.dump(bundle, f)
 
     @classmethod
-    def load(cls, filename):
+    def load(cls, filename : str):
         with open(filename, 'rb') as f:
             bundle = pickle.load(f)
 
@@ -205,7 +218,7 @@ class AGEMONE:
 
 class Actor(AGEMONE):
 
-    def __init__(self, config):
+    def __init__(self, config : Dict[str, Any]) -> None:
         # Agent has a single J_out for action prediction
         self.J_out = np.random.normal(0., config['sigma_Jout'], size = (config['O'], config['N']))
  
@@ -283,7 +296,7 @@ class Actor(AGEMONE):
 
 class Planner(AGEMONE):
 
-    def __init__(self, config):
+    def __init__(self, config : Dict[str, Any]) -> None:
         # Planner needs additional parameters for state prediction
         self.J_out_s = np.zeros((config['I'], config['N']))
         self.J_out_r = np.zeros((1, config['N']))
@@ -327,7 +340,7 @@ class Planner(AGEMONE):
         self.dJ_rec_accumulate += dJ_s
         self.dJ_rec_accumulate += dJ_r * eta_rec_r
 
-    def learn_from_evidence(self):
+    def learn_from_evidence(self) -> None: 
         self.J_rec = self.adam_rec.step(self.J_rec, self.dJ_rec_accumulate)
         self.J_out_s = self.adam_out_s.step(self.J_out_s, self.dJ_out_s_accumulate)
         self.J_out_r = self.adam_out_r.step(self.J_out_r, self.dJ_out_r_accumulate)
@@ -338,7 +351,7 @@ class Planner(AGEMONE):
         self.dJ_out_s_accumulate = 0
         self.dJ_rec_accumulate = 0
 
-    def reset(self, spikes : np.ndarray | None = None):
+    def reset(self, spikes : np.ndarray | None = None) -> None:
         super().reset(spikes)
 
         self.dJ_rec_accumulate = 0

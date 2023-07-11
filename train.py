@@ -4,13 +4,13 @@ import pickle
 import numpy as np
 
 from os import path
-from PIL import Image
 from tqdm import trange
 from argparse import ArgumentParser
 from argparse import Namespace
 
 from src.agent import Actor, Planner
 from src.config import Config
+from src.monitor import Recorder
 
 from collections import defaultdict
 
@@ -18,25 +18,30 @@ def main(args : Namespace):
     # * Initialization of environment
     env = gym.make(
         args.env,
+        time_limit  = args.timeout,
         render_mode = args.render_mode,
-        time_limit = args.timeout,
         num_actions = args.num_actions,
     )
 
     agent   = Actor  (Config[args.env])
     planner = Planner(Config[args.env])
+    monitor = Recorder(args.monitor)
 
-    stats = defaultdict(list)
+    monitor.criterion = lambda episode : episode % args.monitor_freq == 0
 
     for rep in trange(args.n_rep):
         agent.forget()
         planner.forget()
 
+        monitor.reset()
+
         reward_tot = []
         reward_fin = []
 
+        agent.register_step_callback(monitor)
+
         iterator = trange(args.epochs, desc = 'Episode reward: ---')
-        for _ in iterator:
+        for episode in iterator:
             agent.reset()
             planner.reset()
             obs, info = env.reset(options = {'button_pressed' : True})
@@ -47,7 +52,7 @@ def main(args : Namespace):
 
             while not done and not timeout:
                 # * Agent action
-                action = agent.step(obs['agent_target'], deterministic = True)
+                action = agent.step(obs['agent_target'], deterministic = True, episode = episode)
 
                 # * Planner action: prediction of next env state
                 # Convert action to one-hot for concatenation with the observation
@@ -64,6 +69,9 @@ def main(args : Namespace):
                 planner.learn_from_evidence()
 
                 r_tot += r_fin
+
+            # Commit monitor buffer after episode end to have clear episode separation in data
+            monitor.commit_buffer()
 
             agent.learn_from_evidence()
             
@@ -92,8 +100,8 @@ def main(args : Namespace):
 
                 agent.learn_from_evidence()
 
-        stats['reward_tot'].append(reward_tot)
-        stats['reward_fin'].append(reward_fin) 
+        monitor['reward_tot'].append(reward_tot)
+        monitor['reward_fin'].append(reward_fin) 
         
         # * Save agent
         agent.save(path.join(args.save_dir, f'agent_{args.env}_{str(rep).zfill(2)}.pkl'))
@@ -101,8 +109,9 @@ def main(args : Namespace):
         # * Save planner
         planner.save(path.join(args.save_dir, f'planner_{args.env}_{str(rep).zfill(2)}.pkl'))
 
-    with open(path.join(args.save_dir, f'stats_{args.env}.pkl'), 'wb') as f:
-        pickle.dump(stats, f)
+        # Save the monitored quantities
+        filename = path.join(args.save_dir, f'stats_{args.env}.pkl')
+        monitor.dump(filename)
 
 if __name__ == '__main__':
     parser = ArgumentParser()
@@ -116,7 +125,9 @@ if __name__ == '__main__':
     parser.add_argument('-num_actions', type = int, default = 8, help = 'Number of available discrete actions. Use 0 to trigger continuous control.')
     # parser.add_argument('-dream_lag', default = 50, help = 'Time step of dreams')
     parser.add_argument('-render_mode', type = str, default = None, choices = ['human', 'rgb_array', None], help = 'Rendering mode')
-
+    parser.add_argument('-monitor', type = str, nargs = '*', default = [], help = 'Path to monitor configuration for metric recording')
+    parser.add_argument('-monitor_freq', type = int, default = 1, help = 'Episode Frequency for metric recording')
+    
     parser.add_argument('-save_dir', type = str, default = 'data', help = 'Directory to save data')
     parser.add_argument('-load_dir', type = str, default = 'data', help = 'Directory to load data')
 
