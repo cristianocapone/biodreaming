@@ -149,7 +149,13 @@ class AGEMONE:
     def _dsigm (self, x : np.ndarray, dv : float = None) -> np.ndarray:
         return self._sigm (x, dv = dv) * (1. - self._sigm (x, dv = dv))
 
-    def step(self, inp : np.ndarray, deterministic : bool = False, **kwd) -> Any:
+    def step(self, state : np.ndarray, action : np.ndarray | None = None, deterministic : bool = False, **kwd) -> Any:
+        # Collect the state and action variables for monitoring
+        self.inp_state  = state
+        self.inp_action = action
+        
+        inp = state if action is None else np.concatenate((state, action))
+        
         itau_m = self.itau_m
         itau_s = self.itau_s
 
@@ -181,7 +187,7 @@ class AGEMONE:
         self.step_callback = None 
 
     @abstractclassmethod
-    def policy(self, state : np.ndarray, **kwargs) -> Any:
+    def policy(self, state : np.ndarray, *args, **kwargs) -> Any:
         pass
 
     def reset(self, spikes : np.ndarray | None = None):
@@ -252,8 +258,8 @@ class Actor(AGEMONE):
             case 'prob': action = int(np.random.choice(len(p_out), p = p_out))
             case 'raw' : action = p_out
         
-        self.p_out = p_out
-        self.action = action
+        self.out_prob   = p_out
+        self.out_action = action
 
         return action
 
@@ -261,8 +267,8 @@ class Actor(AGEMONE):
         # From last action (int) compute the action vector and its difference
         # with the probability vector
         act_vec = np.zeros(self.O)
-        act_vec[self.action] = 1
-        act_diff = act_vec - self.p_out
+        act_vec[self.out_action] = 1
+        act_diff = act_vec - self.out_prob
 
         pseudo = self._dsigm(self.H, dv = 1.)
         
@@ -321,11 +327,11 @@ class Planner(AGEMONE):
 
     def policy(self, state : np.ndarray):
         self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
+ 
+        self.next_state  = self.J_out_s @ self.state_out
+        self.next_reward = self.J_out_r @ self.state_out
 
-        next_state  = self.J_out_s @ self.state_out
-        next_reward = self.J_out_r @ self.state_out
-
-        return next_state, next_reward
+        return self.next_state, self.next_reward
 
     def accumulate_evidence(self, pred : Tuple[np.ndarray, float], targ  : Tuple[np.ndarray, float], eta_rec_r : float = 0.5):
         s_pred, r_pred = pred

@@ -25,7 +25,7 @@ def main(args : Namespace):
 
     agent   = Actor  (Config[args.env])
     planner = Planner(Config[args.env])
-    monitor = Recorder(args.monitor)
+    monitor = Recorder(args.monitor, do_raise=args.strict_monitor)
 
     monitor.criterion = lambda episode : episode % args.monitor_freq == 0
 
@@ -38,7 +38,9 @@ def main(args : Namespace):
         reward_tot = []
         reward_fin = []
 
+        env.register_step_callback(monitor)
         agent.register_step_callback(monitor)
+        planner.register_step_callback(monitor)
 
         iterator = trange(args.epochs, desc = 'Episode reward: ---')
         for episode in iterator:
@@ -51,16 +53,24 @@ def main(args : Namespace):
             done, timeout = False, False
 
             while not done and not timeout:
+                state = obs['agent_target']
+
                 # * Agent action
-                action = agent.step(obs['agent_target'], deterministic = True, episode = episode)
+                action = agent.step(state, deterministic = True, episode = episode)
 
                 # * Planner action: prediction of next env state
                 # Convert action to one-hot for concatenation with the observation
-                planner_obs = np.concatenate((np.eye(args.num_actions)[action], obs['agent_target']))
-                pred_state, pred_reward = planner.step(planner_obs, deterministic = True)
+                # planner_obs = np.concatenate((np.eye(args.num_actions)[action], obs['agent_target']))
+                
+                pred_state, pred_reward = planner.step(
+                                            state,
+                                            action = np.eye(args.num_actions)[action],
+                                            deterministic = True,
+                                            episode = episode
+                                        )
 
                 # * Environment step
-                obs, r_fin, done, timeout, info = env.step(action)
+                obs, r_fin, done, timeout, info = env.step(action, episode = episode)
 
                 # Update agents using the reward signal and planner using the prediction to
                 # the next environment state and reward
@@ -131,6 +141,7 @@ if __name__ == '__main__':
     parser.add_argument('-save_dir', type = str, default = 'data', help = 'Directory to save data')
     parser.add_argument('-load_dir', type = str, default = 'data', help = 'Directory to load data')
 
+    parser.add_argument('--strict_monitor', action='store_true', default=False)
 
     args = parser.parse_args()
 

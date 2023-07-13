@@ -1,10 +1,12 @@
+import warnings
 import numpy as np
 import pygame as pg
 from gym import Env
 from gym import spaces
+from scipy.spatial.distance import cosine
 from scipy.spatial.distance import euclidean
 
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Callable
 
 black = (0, 0, 0) 
 white = (255, 255, 255)
@@ -78,6 +80,7 @@ class ButtonFood(Env):
         # Internal timekeeping & done flag
         self.time = 0 
         self.done = False 
+        self.reward = 0
 
         # Here we init the position of target and agent and button
         self._agent_location  = default(init_agent, np.ones(2) * 0.5)
@@ -89,6 +92,9 @@ class ButtonFood(Env):
 
         # Here we initialize the flag the signal whether the button was pressed
         self.is_button_pressed = False
+
+        # Callback for recording environment quantities
+        self.step_callback = None
 
         # Variable needed for rendering
         self.clock = None
@@ -118,12 +124,13 @@ class ButtonFood(Env):
             'env' : 'button-food',
             'done' : self.done,
             'time' : self.time,
+            'reward' : self.reward,
             'target_distance' : euclidean(self._agent_location, self._target_location),
             'button_distance' : euclidean(self._agent_location, self._button_location),
             'button_pressed'  : self.is_button_pressed,
         }
 
-    def step(self, action : np.ndarray | Tuple[int, int]):
+    def step(self, action : np.ndarray | Tuple[int, int], **kwd):
         if self.discrete_action_space:
             assert self.action_space.contains(
                 action
@@ -133,12 +140,6 @@ class ButtonFood(Env):
             self._agent_velocity = np.array(
                                     [np.cos(theta[action]), np.sin(theta[action])]
                                 ) * self.max_speed
-
-            # match action:
-            #     case 0: self._agent_velocity = np.array([+1, 0]) * self.max_speed
-            #     case 1: self._agent_velocity = np.array([-1, 0]) * self.max_speed
-            #     case 2: self._agent_velocity = np.array([0, +1]) * self.max_speed
-            #     case 3: self._agent_velocity = np.array([0, -1]) * self.max_speed
         else:
             self._agent_velocity = np.array(action).clip(-self.max_speed, self.max_speed)
 
@@ -157,19 +158,26 @@ class ButtonFood(Env):
         self.done |= target_dist < self._target_radius and self.is_button_pressed or self.time > self.time_limit
 
         # Compute the reward
-        reward = self.is_button_pressed / target_dist
+        # reward = self.is_button_pressed / target_dist
+
+        # Reward is the alignment of the agent velocity with the
+        # target position vector with respect to the agent position
+        self.reward = 1 - cosine(self._agent_velocity, self._target_location - self._agent_location)
 
         # Timekeeping for out-of-time-limit control
         self.time += 1
         self.truncated = self.time > self.time_limit
 
-        obs = self._get_obs()
-        info = self._get_info()
+        self.obs  = self._get_obs()
+        self.info = self._get_info()
 
         if self.render_mode == 'human':
             self.render()
 
-        return obs, reward, self.done, self.truncated, info 
+        if self.step_callback:
+            self.step_callback(self, **kwd)
+
+        return self.obs, self.reward, self.done, self.truncated, self.info 
 
     def reset(
         self,
@@ -299,16 +307,25 @@ class ButtonFood(Env):
             pg.display.quit()
             pg.quit()
 
+    def register_step_callback(self, fn : Callable) -> None:
+        self.step_callback = fn
+
+    def unregister_step_callback(self) -> None:
+        self.step_callback = None 
+
     @classmethod
     def encode(
         cls,
         pos : np.ndarray | Tuple[int, int],
         dim : int = 25,
+        std : float = 0.1,
         domain : Tuple[float, float] = (0, 1),
     ) -> np.ndarray:
         
+        if std * dim < 1:
+            warnings.warn('Standard deviation used for encoding might be too small')
+        
         pos = np.array(pos)
-        shape = pos.shape
         
         x, y = pos 
         l, r = domain
@@ -320,18 +337,33 @@ class ButtonFood(Env):
         x = np.clip(x, l, l + w)
         y = np.clip(y, b, b + h)
 
-        # Bring position to a common encoding of [time, batch, dim]
-        # x = np.atleast_3d(x).transpose(1, 2, 0)
-        # y = np.atleast_3d(y).transpose(1, 2, 0)
+        mux = np.linspace(l, l + w, dim) - .5 * w / dim
+        muy = np.linspace(b, b + h, dim) - .5 * h / dim
 
-        mux = np.linspace(l, l + w, dim)
-        muy = np.linspace(b, b + h, dim)
-
-        codex = np.exp(-0.5 * ((x - mux) / w)**2)
-        codey = np.exp(-0.5 * ((y - muy) / h)**2)
+        codex = np.exp(-0.5 * ((x - mux) / (w * std))**2)
+        codey = np.exp(-0.5 * ((y - muy) / (h * std))**2)
 
         return np.concatenate([codex, codey], axis = -1)
+    
+    @classmethod
+    def decode(
+        cls,
+        encoded_state : np.ndarray,
+        dim : int = 25
+    ) -> np.ndarray:
+        x_state, y_state = encoded_state[..., :dim], encoded_state[..., dim:]
 
+        x_idxs = np.argsort(x_state, axis=-1)[..., :]
+        y_idxs = np.argsort(y_state, axis=-1)[..., :]
+        
+        x_weight = np.take_along_axis(x_state, x_idxs, axis = -1)
+        y_weight = np.take_along_axis(y_state, y_idxs, axis = -1)
+
+        x_pos = np.average(x_idxs / dim, weights = x_weight + 1e-10, axis = -1)
+        y_pos = np.average(y_idxs / dim, weights = y_weight + 1e-10, axis = -1)
+
+        return np.stack((x_pos, y_pos), axis = 0)
+    
     @classmethod
     def build_expert(
         cls,
