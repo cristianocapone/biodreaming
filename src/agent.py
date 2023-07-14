@@ -253,10 +253,14 @@ class Actor(AGEMONE):
         p_out = self.J_out @ self.state_out
         if self.config['outsig']: p_out = np.exp(p_out) / np.sum(np.exp(p_out))
         
-        match mode:
-            case 'amax': action = np.argmax(p_out)
-            case 'prob': action = int(np.random.choice(len(p_out), p = p_out))
-            case 'raw' : action = p_out
+        # match mode:
+        #     case 'amax': action = np.argmax(p_out)
+        #     case 'prob': action = int(np.random.choice(len(p_out), p = p_out))
+        #     case 'raw' : action = p_out
+        if   mode == 'amax': action = np.argmax(p_out)
+        elif mode == 'prob': action = int(np.random.choice(len(p_out), p = p_out))
+        elif mode == 'raw' : action = p_out
+        else: raise ValueError(f'Unknown policy mode: {mode}')
         
         self.out_prob   = p_out
         self.out_action = action

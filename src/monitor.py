@@ -1,5 +1,6 @@
 
 import pickle
+import warnings
 from typing import Tuple, Any
 from collections import defaultdict
 
@@ -18,6 +19,8 @@ class Recorder:
 
         self.do_raise = do_raise
 
+        self.issued_warnings = set()
+
     def __call__(self, obj: Any, **kwd) -> None:
         if not self.criterion(**kwd):
             return None
@@ -26,7 +29,15 @@ class Recorder:
             try:
                 obj_name, attr_name = name.split('.')
 
-                if obj_name.lower() not in str(obj).lower(): continue
+                if obj_name.lower() not in str(obj).lower():
+                    warn_msg = f'Namespace {obj_name} does not match, however object {obj} does have attribute {attr_name} but we are skipping recording.'
+                    hash_msg = hash(warn_msg)
+                    if hasattr(obj, attr_name) and hash_msg not in self.issued_warnings:
+                        self.issued_warnings.add(hash_msg)
+                        warnings.warn(warn_msg)
+
+                    # Skip recording of this attribute because of wrong namespace
+                    continue
             except ValueError:
                 attr_name = name
 

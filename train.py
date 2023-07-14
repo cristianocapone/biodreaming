@@ -59,11 +59,9 @@ def main(args : Namespace):
                 action = agent.step(state, deterministic = True, episode = episode)
 
                 # * Planner action: prediction of next env state
-                # Convert action to one-hot for concatenation with the observation
-                # planner_obs = np.concatenate((np.eye(args.num_actions)[action], obs['agent_target']))
-                
                 pred_state, pred_reward = planner.step(
                                             state,
+                                            # Convert action to one-hot for concatenation with the state
                                             action = np.eye(args.num_actions)[action],
                                             deterministic = True,
                                             episode = episode
@@ -96,15 +94,19 @@ def main(args : Namespace):
                 planner.reset()
 
                 obs, info = env.reset(options = {'button_pressed' : True})
-                obs = obs['agent_target']
+                state = obs['agent_target']
 
                 for dream_t in range(args.dream_len):
                     # * Agent action
-                    action = agent.step(obs, deterministic = True)
+                    action = agent.step(state, deterministic = True)
 
                     # * Planner predicts the new observation
-                    planner_obs = np.concatenate((action, obs))
-                    obs, reward = planner.step(planner_obs, deterministic = True)
+                    state, reward = planner.step(
+                                            state,
+                                            action = np.eye(args.num_actions)[action],
+                                            deterministic = True,
+                                            # episode = episode
+                                        )
                     
                     agent.accumulate_evidence(reward)
 
