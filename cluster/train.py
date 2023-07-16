@@ -1,6 +1,4 @@
 
-import gym
-import pickle
 import numpy as np
 
 from os import path
@@ -8,18 +6,15 @@ from tqdm import trange
 from argparse import ArgumentParser
 from argparse import Namespace
 
-from src.agent import Actor, Planner
-from src.config import Config
-from src.monitor import Recorder
-
-from collections import defaultdict
+from .src.envs import VanillaButtonFood
+from .src.agent import Actor, Planner
+from .src.config import Config
+from .src.monitor import Recorder
 
 def main(args : Namespace):
     # * Initialization of environment
-    env = gym.make(
-        args.env,
+    env = VanillaButtonFood(
         time_limit  = args.timeout,
-        render_mode = args.render_mode,
         num_actions = args.num_actions,
     )
 
@@ -64,13 +59,13 @@ def main(args : Namespace):
                 action = agent.step(state, deterministic = True, episode = episode)
 
                 # * Planner action: prediction of next env state
-                # pred_state, pred_reward = planner.step(
-                #                             state,
-                #                             # Convert action to one-hot for concatenation with the state
-                #                             action = np.eye(args.num_actions)[action],
-                #                             deterministic = True,
-                #                             episode = episode
-                #                         )
+                pred_state, pred_reward = planner.step(
+                                            state,
+                                            # Convert action to one-hot for concatenation with the state
+                                            action = np.eye(args.num_actions)[action],
+                                            deterministic = True,
+                                            episode = episode
+                                        )
 
                 # * Environment step
                 obs, r_fin, done, timeout, info = env.step(action, episode = episode)
@@ -78,8 +73,8 @@ def main(args : Namespace):
                 # Update agents using the reward signal and planner using the prediction to
                 # the next environment state and reward
                 agent.accumulate_evidence(r_fin)
-                # planner.accumulate_evidence((pred_state, pred_reward), (obs['agent_target'], r_fin))
-                # planner.learn_from_evidence()
+                planner.accumulate_evidence((pred_state, pred_reward), (obs['agent_target'], r_fin))
+                planner.learn_from_evidence()
 
                 r_tot += r_fin
 
@@ -133,7 +128,6 @@ def main(args : Namespace):
 if __name__ == '__main__':
     parser = ArgumentParser()
 
-    parser.add_argument('-env', type = str, default = 'ButtonFood-v0', help = 'Environment to run')
     parser.add_argument('-n_rep', type = int, default = 10, help = 'Number of repetitions of the experiment')
     parser.add_argument('-epochs', type = int, default = 2000, help = 'Number of agent training iterations')
     parser.add_argument('-timeout', type = int, default = 1000, help = 'Max number of environment episodes to run')
