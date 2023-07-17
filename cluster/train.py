@@ -116,13 +116,14 @@ def main(args : Namespace):
         monitor['reward_fin'].append(reward_fin) 
         
         # * Save agent
-        agent.save(path.join(args.save_dir, f'agent_{args.env}_{str(rep).zfill(2)}.pkl'))
+        env_name = 'ButtonFood-v0'
+        agent.save(path.join(args.save_dir, f'agent_{env_name}_{str(rep).zfill(2)}.pkl'))
 
         # * Save planner
-        planner.save(path.join(args.save_dir, f'planner_{args.env}_{str(rep).zfill(2)}.pkl'))
+        planner.save(path.join(args.save_dir, f'planner_{env_name}_{str(rep).zfill(2)}.pkl'))
 
         # Save the monitored quantities
-        filename = path.join(args.save_dir, f'stats_{args.env}.pkl')
+        filename = path.join(args.save_dir, f'stats_{env_name}.pkl')
         monitor.dump(filename)
 
 if __name__ == '__main__':
