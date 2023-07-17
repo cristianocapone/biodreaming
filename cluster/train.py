@@ -6,10 +6,10 @@ from tqdm import trange
 from argparse import ArgumentParser
 from argparse import Namespace
 
-from .src.envs import VanillaButtonFood
-from .src.agent import Actor, Planner
-from .src.config import Config
-from .src.monitor import Recorder
+from src.envs import VanillaButtonFood
+from src.agent import Actor, Planner
+from src.config import Config
+from src.monitor import Recorder
 
 def main(args : Namespace):
     # * Initialization of environment
@@ -18,8 +18,8 @@ def main(args : Namespace):
         num_actions = args.num_actions,
     )
 
-    agent   = Actor  (Config[args.env])
-    planner = Planner(Config[args.env])
+    agent   = Actor  (Config['ButtonFood-v0'])
+    planner = Planner(Config['ButtonFood-v0'])
     monitor = Recorder(args.monitor, do_raise=args.strict_monitor)
 
     monitor.criterion = lambda episode : episode % args.monitor_freq == 0

@@ -50,6 +50,7 @@ class VanillaButtonFood:
         # along the x- and y-direction.
         self.max_speed = max_speed
         self.discrete_action_space = num_actions > 0
+        self.num_actions = num_actions
 
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
@@ -65,11 +66,11 @@ class VanillaButtonFood:
 
         # Here we init the position of target and agent and button
         self._agent_location  = default(init_agent, np.ones(2) * 0.5)
-        self._target_location = default(init_target, self.np_random.random(2)) 
-        self._button_location = default(init_button, self.np_random.random(2))
+        self._target_location = default(init_target, np.random.random(2)) 
+        self._button_location = default(init_button, np.random.random(2))
         self._agent_velocity  = np.zeros(2) 
 
-        self._target_identity = self.np_random.integers(low=1, high=45)
+        self._target_identity = np.random.randint(low=1, high=45)
 
         # Here we initialize the flag the signal whether the button was pressed
         self.is_button_pressed = False
@@ -105,11 +106,7 @@ class VanillaButtonFood:
 
     def step(self, action : Union[np.ndarray, Tuple[int, int]], **kwd):
         if self.discrete_action_space:
-            assert self.action_space.contains(
-                action
-            ), f"{action!r} ({type(action)}) invalid"
-
-            theta = np.linspace(0, 2 * np.pi, num = self.action_space.n, endpoint = False)
+            theta = np.linspace(0, 2 * np.pi, num = self.num_actions, endpoint = False)
             self._agent_velocity = np.array(
                                     [np.cos(theta[action]), np.sin(theta[action])]
                                 ) * self.max_speed
@@ -144,9 +141,6 @@ class VanillaButtonFood:
         self.obs  = self._get_obs()
         self.info = self._get_info()
 
-        if self.render_mode == 'human':
-            self.render()
-
         if self.step_callback:
             self.step_callback(self, **kwd)
 
@@ -160,21 +154,18 @@ class VanillaButtonFood:
         init_button : Optional[np.ndarray] = None,
         options : Any = None,
     ):
-        # We need the following line to seed self.np_random
-        super().reset(seed=seed)
-
         options = default(options, {'button_pressed' : False})
 
         # We will sample the target's location randomly until it does not coincide with the agent's location
-        self._agent_location  = np.array(default(init_agent,  self.np_random.uniform(*self.domain, size=2)))
-        self._button_location = np.array(default(init_button, self.np_random.uniform(*self.domain, size=2)))
+        self._agent_location  = np.array(default(init_agent,  np.random.uniform(*self.domain, size=2)))
+        self._button_location = np.array(default(init_button, np.random.uniform(*self.domain, size=2)))
         self._target_location = np.array(default(init_target, self._button_location))
 
-        self._target_identity = self.np_random.integers(0, 40, size=(2,))
+        self._target_identity = np.random.randint(0, 40, size=(2,))
 
         while euclidean(self._button_location, self._target_location) < self._button_radius or\
               euclidean(self._agent_location,  self._target_location) < 0.2:
-            self._target_location = self.np_random.uniform(*self.domain, size=2)
+            self._target_location = np.random.uniform(*self.domain, size=2)
 
         self.is_button_pressed = options['button_pressed'] 
         self.time = 0
