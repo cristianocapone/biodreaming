@@ -187,7 +187,7 @@ class AGEMONE:
         self.step_callback = None 
 
     @abstractclassmethod
-    def policy(self, state : np.ndarray, *args, **kwargs) -> Any:
+    def policy(self, spikes : np.ndarray, *args, **kwargs) -> Any:
         pass
 
     def reset(self, spikes : np.ndarray | None = None):
@@ -245,10 +245,10 @@ class Actor(AGEMONE):
             'config' : self.config,
         }
 
-    def policy(self, state : np.ndarray, mode : str | None = None):
+    def policy(self, spikes : np.ndarray, mode : str | None = None):
         mode = default(mode, self.config['step_mode'])
 
-        self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
+        self.state_out = self.state_out * self.itau_ro  + spikes * (1 - self.itau_ro)
 
         p_out = self.J_out @ self.state_out
         if self.config['outsig']: p_out = np.exp(p_out) / np.sum(np.exp(p_out))
@@ -329,8 +329,8 @@ class Planner(AGEMONE):
             'config' : self.config,
         }
 
-    def policy(self, state : np.ndarray):
-        self.state_out = self.state_out * self.itau_ro  + state * (1 - self.itau_ro)
+    def policy(self, spikes : np.ndarray):
+        self.state_out = self.state_out * self.itau_ro  + spikes * (1 - self.itau_ro)
  
         self.next_state  = self.J_out_s @ self.state_out
         self.next_reward = self.J_out_r @ self.state_out
@@ -341,21 +341,21 @@ class Planner(AGEMONE):
         s_pred, r_pred = pred
         s_targ, r_targ = targ
 
-        dJ_s = np.outer(self.J_out_s.T @ (s_targ - s_pred) * self._dsigm(self.H, dv = 1.), self.dH)
-        dJ_r = np.outer(self.J_out_r.T @ (r_targ - r_pred) * self._dsigm(self.H, dv = 1.), self.dH)
-
         self.dJ_out_s_accumulate += np.outer(s_targ - s_pred, self.state_out)
         self.dJ_out_r_accumulate += np.outer(r_targ - r_pred, self.state_out)
 
-        self.dJ_rec_accumulate += dJ_s
-        self.dJ_rec_accumulate += dJ_r * eta_rec_r
+        # dJ_s = np.outer(self.J_out_s.T @ (s_targ - s_pred) * self._dsigm(self.H, dv = 1.), self.dH)
+        # dJ_r = np.outer(self.J_out_r.T @ (r_targ - r_pred) * self._dsigm(self.H, dv = 1.), self.dH)
+
+        # self.dJ_rec_accumulate += dJ_s
+        # self.dJ_rec_accumulate += dJ_r * eta_rec_r
 
     def learn_from_evidence(self) -> None: 
-        self.J_rec = self.adam_rec.step(self.J_rec, self.dJ_rec_accumulate)
+        # self.J_rec = self.adam_rec.step(self.J_rec, self.dJ_rec_accumulate)
         self.J_out_s = self.adam_out_s.step(self.J_out_s, self.dJ_out_s_accumulate)
         self.J_out_r = self.adam_out_r.step(self.J_out_r, self.dJ_out_r_accumulate)
 
-        np.fill_diagonal(self.J_rec, 0)
+        # np.fill_diagonal(self.J_rec, 0)
 
         self.dJ_out_r_accumulate = 0
         self.dJ_out_s_accumulate = 0

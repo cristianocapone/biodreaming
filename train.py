@@ -8,6 +8,8 @@ from tqdm import trange
 from argparse import ArgumentParser
 from argparse import Namespace
 
+from scipy.stats import pearsonr
+
 from src.agent import Actor, Planner
 from src.config import Config
 from src.monitor import Recorder
@@ -23,8 +25,8 @@ def main(args : Namespace):
         num_actions = args.num_actions,
     )
 
-    agent   = Actor  (Config[args.env])
-    planner = Planner(Config[args.env])
+    agent   = Actor  (Config[f'{args.env}_Agent'])
+    planner = Planner(Config[f'{args.env}_Planner'])
     monitor = Recorder(args.monitor, do_raise=args.strict_monitor)
 
     monitor.criterion = lambda episode : episode % args.monitor_freq == 0
@@ -36,19 +38,19 @@ def main(args : Namespace):
         monitor.reset()
 
         reward_tot = []
-        reward_fin = []
+        reward_corr = []
 
         env.register_step_callback(monitor)
         agent.register_step_callback(monitor)
         planner.register_step_callback(monitor)
 
-        iterator = trange(args.epochs, desc = 'Episode reward: ---')
+        iterator = trange(args.epochs, desc = 'Episode reward: --- | Model-reward corr: ---')
         for episode in iterator:
             agent.reset()
             planner.reset()
             obs, info = env.reset(options = {
                     'button_pressed' : True,
-                    # 'agent_init' : np.array((0.5, 0.5)),
+                    'agent_init' : np.array((0.5, 0.5)),
                     # 'target_init' : np.array((0.8, 0.2)),
                     }
                 )
@@ -57,41 +59,49 @@ def main(args : Namespace):
             r_tot = 0
             done, timeout = False, False
 
+            r_true_hist, r_pred_hist = [], [] 
+
             while not done and not timeout:
                 state = obs['agent_target']
 
                 # * Agent action
-                action = agent.step(state, deterministic = True, episode = episode)
+                # action = agent.step(state, deterministic = True, episode = episode)
+                action = np.random.randint(8)
 
                 # * Planner action: prediction of next env state
-                # pred_state, pred_reward = planner.step(
-                #                             state,
-                #                             # Convert action to one-hot for concatenation with the state
-                #                             action = np.eye(args.num_actions)[action],
-                #                             deterministic = True,
-                #                             episode = episode
-                #                         )
+                pred_state, pred_reward = planner.step(
+                                            state,
+                                            # Convert action to one-hot for concatenation with the state
+                                            action = np.eye(args.num_actions)[action],
+                                            deterministic = True,
+                                            episode = episode
+                                        )
 
                 # * Environment step
-                obs, r_fin, done, timeout, info = env.step(action, episode = episode)
+                obs, true_reward, done, timeout, info = env.step(action, episode = episode)
 
                 # Update agents using the reward signal and planner using the prediction to
                 # the next environment state and reward
-                agent.accumulate_evidence(r_fin)
-                # planner.accumulate_evidence((pred_state, pred_reward), (obs['agent_target'], r_fin))
-                # planner.learn_from_evidence()
+                # agent.accumulate_evidence(r_fin)
+                planner.accumulate_evidence((pred_state, pred_reward), (obs['agent_target'], true_reward))
+                planner.learn_from_evidence()
 
-                r_tot += r_fin
+                r_tot += true_reward
+
+                r_true_hist.append(true_reward)
+                r_pred_hist.append(pred_reward)
 
             # Commit monitor buffer after episode end to have clear episode separation in data
             monitor.commit_buffer()
 
-            agent.learn_from_evidence()
-            
-            reward_tot.append(r_tot)
-            reward_fin.append(r_fin)
+            # agent.learn_from_evidence()
+             
+            r_corr = pearsonr(r_true_hist, r_pred_hist).statistic[0]
+            msg = f'Episode reward {r_tot:.2f} | Model-reward corr. {r_corr:.2f}'
+            iterator.set_description(msg)
 
-            iterator.set_description(f'Episode reward {r_fin:.2f}')
+            reward_tot.append(r_tot)
+            reward_corr.append(r_corr)
  
             # * §§§ Dreaming phase §§§
             for _ in range(args.num_dream):
@@ -118,7 +128,7 @@ def main(args : Namespace):
                 agent.learn_from_evidence()
 
         monitor['reward_tot'].append(reward_tot)
-        monitor['reward_fin'].append(reward_fin) 
+        monitor['reward_corr'].append(reward_corr)
         
         # * Save agent
         agent.save(path.join(args.save_dir, f'agent_{args.env}_{str(rep).zfill(2)}.pkl'))
