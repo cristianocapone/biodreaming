@@ -60,8 +60,11 @@ class ButtonFood(Env):
         # the target and the food location in the 2D world
         self.observation_space = spaces.Dict(
             {
-                'agent_target' : spaces.Box(*domain, shape=(2 * input_dim,), dtype=float),
-                'agent_button' : spaces.Box(*domain, shape=(2 * input_dim,), dtype=float),
+                
+                'ENC_target-agent' : spaces.Box(*domain, shape=(2 * input_dim,), dtype=float),
+                'ENC_button-agent' : spaces.Box(*domain, shape=(2 * input_dim,), dtype=float),
+                'target-agent' : spaces.Box(*(-1, 1), shape=(2,), dtype=float),
+                'button-agent' : spaces.Box(*(-1, 1), shape=(2,), dtype=float),
                 'agent' : spaces.Box(*domain, shape=(2,), dtype=float),
                 'target': spaces.Box(*domain, shape=(2,), dtype=float),
                 'button': spaces.Box(*domain, shape=(2,), dtype=float),
@@ -112,8 +115,8 @@ class ButtonFood(Env):
         return {
             # The environment observation is the gaussian-encoded position
             # difference from target and button concatenated together
-            'ENC:target-agent' : self.encode(self._target_location - self._agent_location, dim = self._input_dim, domain = self.domain),
-            'ENC:button-agent' : self.encode(self._button_location - self._agent_location, dim = self._input_dim, domain = self.domain),
+            'ENC_target-agent' : self.encode(self._target_location - self._agent_location, dim = self._input_dim, domain = self.domain),
+            'ENC_button-agent' : self.encode(self._button_location - self._agent_location, dim = self._input_dim, domain = self.domain),
             'target-agent' : self._target_location - self._agent_location,
             'button-agent' : self._button_location - self._agent_location,
             'agent' : self._agent_location,
@@ -134,17 +137,7 @@ class ButtonFood(Env):
         }
 
     def step(self, action : np.ndarray | Tuple[int, int], **kwd):
-        if self.discrete_action_space:
-            assert self.action_space.contains(
-                action
-            ), f"{action!r} ({type(action)}) invalid"
-
-            theta = np.linspace(0, 2 * np.pi, num = self.action_space.n, endpoint = False)
-            self._agent_velocity = np.array(
-                                    [np.cos(theta[action]), np.sin(theta[action])]
-                                ) * self.max_speed
-        else:
-            self._agent_velocity = np.array(action).clip(-self.max_speed, self.max_speed)
+        self._agent_velocity = self._action_to_vel(action)
 
         # Action is the instantaneous speed in the x- and y-direction
         self._agent_location += self._agent_velocity
@@ -216,6 +209,18 @@ class ButtonFood(Env):
 
         return obs, info
     
+    def get_reward(
+        self,
+        state : np.ndarray,
+        action : np.ndarray,
+        is_state_encoded : bool = True,
+    ) -> float:
+        vel = self._action_to_vel(action)
+
+        state = self.decode(state) if is_state_encoded else state
+
+        return 1 - cosine(vel, state)
+
     def render(self, render_mode : str | None = None, num_grid_lines : int = 9):
         render_mode = default(render_mode, self.render_mode)
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -295,6 +300,18 @@ class ButtonFood(Env):
                 np.array(pg.surfarray.pixels3d(canvas)), axes=(1, 0, 2)
             )
         
+    def _action_to_vel(self, action : np.ndarray) -> np.ndarray:
+        if self.discrete_action_space:
+            assert self.action_space.contains(
+                action
+            ), f"{action!r} ({type(action)}) invalid"
+
+            theta = np.linspace(0, 2 * np.pi, num = self.action_space.n, endpoint = False)
+            return np.array([np.cos(theta[action]), np.sin(theta[action])]) * self.max_speed
+        else:
+            return np.array(action).clip(-self.max_speed, self.max_speed)
+
+
     def _agent_heading(self):
         vx, vy = self._agent_velocity
 

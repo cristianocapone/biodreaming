@@ -364,11 +364,11 @@ class Planner(AGEMONE):
         self.dJ_out_s_accumulate += np.outer(s_targ - s_pred, self.state_out)
         self.dJ_out_r_accumulate += np.outer(r_targ - r_pred, self.state_out)
 
-        # dJ_s = np.outer(self.J_out_s.T @ (s_targ - s_pred) * self._dsigm(self.H, dv = 1.), self.dH)
-        # dJ_r = np.outer(self.J_out_r.T @ (r_targ - r_pred) * self._dsigm(self.H, dv = 1.), self.dH)
+        dJ_s = np.outer(self.J_out_s.T @ (s_targ - s_pred) * self._dsigm(self.H, dv = 1.), self.dH)
+        dJ_r = np.outer(self.J_out_r.T @ (r_targ - r_pred) * self._dsigm(self.H, dv = 1.), self.dH)
 
-        # self.dJ_rec_accumulate += dJ_s
-        # self.dJ_rec_accumulate += dJ_r * eta_rec_r
+        self.dJ_rec_accumulate += dJ_s
+        self.dJ_rec_accumulate += dJ_r * eta_rec_r
 
     def learn_from_evidence(self, episode : int | None = None) -> None:
         if 'learn_every_n' in self.config and episode % self.config['learn_every_n'] != 0: return

@@ -240,7 +240,7 @@ BUTTONFOOD_V0_PLANNER = {
        'sigma_Jrec' : 0.,
        'sigma_Jout' : 0.001,
 
-       'alpha_rec' : 0e-4,
+       'alpha_rec' : 1e-4,
        'alpha_out' : 5e-4,
 
        'sigma_input' : 60.,

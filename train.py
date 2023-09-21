@@ -71,7 +71,7 @@ def main(args : Namespace):
 
             # actseq = [np.random.randint(args.num_actions)] * np.random.randint(1, 5)
 
-            while not done and not timeout:
+            while not done and not timeout and episode < args.real_world_until:
                 state = obs[env_state_key]
 
                 # * Agent action
@@ -114,7 +114,7 @@ def main(args : Namespace):
             # Commit monitor buffer after episode end to have clear episode separation in data
             monitor.commit_buffer()
 
-            # agent.learn_from_evidence(episode = episode)
+            agent.learn_from_evidence(episode = episode)
             planner.learn_from_evidence(episode = episode)
 
             r_true_hist = np.array(r_true_hist).ravel()
@@ -128,7 +128,7 @@ def main(args : Namespace):
             r_errs = mean_squared_error(r_true_hist, r_pred_hist)
             s_errs = mean_squared_error(s_true_hist, s_pred_hist)
 
-            msg = f'Episode reward {r_tot:.2f} | Model-reward corr. {r_corr:.2f}'
+            msg = f'Episode reward {r_tot:^{6}.2f} | Model-reward corr. {r_corr:^{6}.2f}'
             iterator.set_description(msg)
 
             reward_tot.append(r_tot)
@@ -140,6 +140,8 @@ def main(args : Namespace):
  
             # * §§§ Dreaming phase §§§
             for _ in range(args.num_dream):
+                if episode < args.no_dream_before: continue
+
                 agent.reset()
                 planner.reset()
 
@@ -151,13 +153,17 @@ def main(args : Namespace):
                     action = agent.step(state, deterministic = True, episode = -1)
 
                     # * Planner predicts the new observation
-                    state, reward = planner.step(
+                    # For the moment, discard the planner reward and re-compute it
+                    # using the prediction from the planner and the environment
+                    state, _ = planner.step(
                                             state,
                                             action = np.eye(args.num_actions)[action],
                                             deterministic = True,
                                             episode = -1,
                                         )
                     
+                    reward = env.get_reward(state, action)
+
                     agent.accumulate_evidence(reward)
 
                 agent.learn_from_evidence()
@@ -190,7 +196,9 @@ if __name__ == '__main__':
     parser.add_argument('-dream_len', type = int, default = 50, help = 'Length of each planner dream')
     parser.add_argument('-num_actions', type = int, default = 8, help = 'Number of available discrete actions. Use 0 to trigger continuous control.')
     # parser.add_argument('-dream_lag', default = 50, help = 'Time step of dreams')    
-    parser.add_argument('-env_state_key', type = str, default = 'ENC:target-agent', help = 'Key on Env state observation dictionary.')
+    parser.add_argument('-no_dream_before', type = int, default = 250, help = 'Number of initial episodes to skip before dreaming starts.')
+    parser.add_argument('-real_world_until', type = int, default = 250, help = 'Number of episodes until agent can gain experience in the real world.')
+    parser.add_argument('-env_state_key', type = str, default = 'ENC_target-agent', help = 'Key on Env state observation dictionary.')
     parser.add_argument('-render_mode', type = str, default = None, choices = ['human', 'rgb_array', None], help = 'Rendering mode')
     parser.add_argument('-monitor', type = str, nargs = '*', default = [], help = 'Path to monitor configuration for metric recording')
     parser.add_argument('-monitor_freq', type = int, default = 1, help = 'Episode Frequency for metric recording')
