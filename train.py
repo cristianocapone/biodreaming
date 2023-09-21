@@ -16,6 +16,8 @@ from src.monitor import Recorder
 
 from collections import defaultdict
 
+from sklearn.metrics import mean_squared_error
+
 def main(args : Namespace):
     # * Initialization of environment
     env = gym.make(
@@ -24,6 +26,8 @@ def main(args : Namespace):
         render_mode = args.render_mode,
         num_actions = args.num_actions,
     )
+
+    env_state_key = args.env_state_key
 
     agent   = Actor  (Config[f'{args.env}_Agent'])
     planner = Planner(Config[f'{args.env}_Planner'])
@@ -39,6 +43,9 @@ def main(args : Namespace):
 
         reward_tot = []
         reward_corr = []
+        nstate_corr = []
+        reward_errs = []
+        nstate_errs = []
 
         env.register_step_callback(monitor)
         agent.register_step_callback(monitor)
@@ -49,32 +56,41 @@ def main(args : Namespace):
             agent.reset()
             planner.reset()
             obs, info = env.reset(options = {
-                    'button_pressed' : True,
-                    'agent_init' : np.array((0.5, 0.5)),
-                    # 'target_init' : np.array((0.8, 0.2)),
-                    }
-                )
+                            'button_pressed' : True,
+                            'agent_init' : np.array((0.5, 0.5)),
+                            # 'target_init' : np.array((0.8, 0.2)),
+                            }
+                        )
 
             # * §§§ Awake phase §§§
             r_tot = 0
             done, timeout = False, False
 
-            r_true_hist, r_pred_hist = [], [] 
+            r_true_hist, r_pred_hist = [], []
+            s_true_hist, s_pred_hist = [], [] 
+
+            # actseq = [np.random.randint(args.num_actions)] * np.random.randint(1, 5)
 
             while not done and not timeout:
-                state = obs['agent_target']
+                state = obs[env_state_key]
 
                 # * Agent action
-                # action = agent.step(state, deterministic = True, episode = episode)
-                action = np.random.randint(8)
+                action = agent.step(
+                    state,
+                    deterministic = True,
+                    episode = episode
+                )
+                # if len(actseq) < 1: actseq = [np.random.randint(args.num_actions)] * np.random.randint(1, 5)
+                # action = actseq.pop()
 
                 # * Planner action: prediction of next env state
+                # state = obs['target'] - obs['agent']
                 pred_state, pred_reward = planner.step(
                                             state,
                                             # Convert action to one-hot for concatenation with the state
                                             action = np.eye(args.num_actions)[action],
                                             deterministic = True,
-                                            episode = episode
+                                            episode = episode,
                                         )
 
                 # * Environment step
@@ -82,26 +98,45 @@ def main(args : Namespace):
 
                 # Update agents using the reward signal and planner using the prediction to
                 # the next environment state and reward
-                # agent.accumulate_evidence(r_fin)
-                planner.accumulate_evidence((pred_state, pred_reward), (obs['agent_target'], true_reward))
-                planner.learn_from_evidence()
+                agent.accumulate_evidence(true_reward)
+                # true_state = obs['target'] - obs['agent']
+                true_state = obs[env_state_key]
+                planner.accumulate_evidence((pred_state, pred_reward), (true_state, true_reward))
 
                 r_tot += true_reward
 
                 r_true_hist.append(true_reward)
                 r_pred_hist.append(pred_reward)
 
+                s_true_hist.append(true_state)
+                s_pred_hist.append(pred_state)
+
             # Commit monitor buffer after episode end to have clear episode separation in data
             monitor.commit_buffer()
 
-            # agent.learn_from_evidence()
+            # agent.learn_from_evidence(episode = episode)
+            planner.learn_from_evidence(episode = episode)
+
+            r_true_hist = np.array(r_true_hist).ravel()
+            r_pred_hist = np.array(r_pred_hist).ravel()
+            s_true_hist = np.array(s_true_hist).ravel()
+            s_pred_hist = np.array(s_pred_hist).ravel()
              
-            r_corr = pearsonr(r_true_hist, r_pred_hist).statistic[0]
+            r_corr = pearsonr(r_true_hist, r_pred_hist).statistic
+            s_corr = pearsonr(s_true_hist, s_pred_hist).statistic
+
+            r_errs = mean_squared_error(r_true_hist, r_pred_hist)
+            s_errs = mean_squared_error(s_true_hist, s_pred_hist)
+
             msg = f'Episode reward {r_tot:.2f} | Model-reward corr. {r_corr:.2f}'
             iterator.set_description(msg)
 
             reward_tot.append(r_tot)
             reward_corr.append(r_corr)
+            nstate_corr.append(s_corr)
+
+            reward_errs.append(r_errs)
+            nstate_errs.append(s_errs)
  
             # * §§§ Dreaming phase §§§
             for _ in range(args.num_dream):
@@ -109,18 +144,18 @@ def main(args : Namespace):
                 planner.reset()
 
                 obs, info = env.reset(options = {'button_pressed' : True})
-                state = obs['agent_target']
+                state = obs[env_state_key]
 
                 for dream_t in range(args.dream_len):
                     # * Agent action
-                    action = agent.step(state, deterministic = True)
+                    action = agent.step(state, deterministic = True, episode = -1)
 
                     # * Planner predicts the new observation
                     state, reward = planner.step(
                                             state,
                                             action = np.eye(args.num_actions)[action],
                                             deterministic = True,
-                                            # episode = episode
+                                            episode = -1,
                                         )
                     
                     agent.accumulate_evidence(reward)
@@ -129,6 +164,10 @@ def main(args : Namespace):
 
         monitor['reward_tot'].append(reward_tot)
         monitor['reward_corr'].append(reward_corr)
+        monitor['nstate_corr'].append(nstate_corr)
+
+        monitor['reward_errs'].append(reward_errs)
+        monitor['nstate_errs'].append(nstate_errs)
         
         # * Save agent
         agent.save(path.join(args.save_dir, f'agent_{args.env}_{str(rep).zfill(2)}.pkl'))
@@ -150,7 +189,8 @@ if __name__ == '__main__':
     parser.add_argument('-num_dream', type = int, default = 0, help = 'Number of planner dreams')
     parser.add_argument('-dream_len', type = int, default = 50, help = 'Length of each planner dream')
     parser.add_argument('-num_actions', type = int, default = 8, help = 'Number of available discrete actions. Use 0 to trigger continuous control.')
-    # parser.add_argument('-dream_lag', default = 50, help = 'Time step of dreams')
+    # parser.add_argument('-dream_lag', default = 50, help = 'Time step of dreams')    
+    parser.add_argument('-env_state_key', type = str, default = 'ENC:target-agent', help = 'Key on Env state observation dictionary.')
     parser.add_argument('-render_mode', type = str, default = None, choices = ['human', 'rgb_array', None], help = 'Rendering mode')
     parser.add_argument('-monitor', type = str, nargs = '*', default = [], help = 'Path to monitor configuration for metric recording')
     parser.add_argument('-monitor_freq', type = int, default = 1, help = 'Episode Frequency for metric recording')

@@ -149,11 +149,12 @@ class AGEMONE:
     def _dsigm (self, x : np.ndarray, dv : float = None) -> np.ndarray:
         return self._sigm (x, dv = dv) * (1. - self._sigm (x, dv = dv))
 
-    def step(self, state : np.ndarray, action : np.ndarray | None = None, deterministic : bool = False, **kwd) -> Any:
+    def step(self, state : np.ndarray, action : np.ndarray | None = None, deterministic : bool = False, **kwd) -> Any:        
         # Collect the state and action variables for monitoring
         self.inp_state  = state
         self.inp_action = action
         
+        # ? NOTE: What if action scale is DIFFERENT that state scale?
         inp = state if action is None else np.concatenate((state, action))
         
         itau_m = self.itau_m
@@ -234,6 +235,9 @@ class Actor(AGEMONE):
         self.J_input = np.random.normal(0., config['sigma_input'], size = (config['N'], config['I']))
         self.J_teach = np.random.normal(0., config['sigma_teach'], size = (config['N'], config['O']))
 
+        self.J_input /= np.sqrt(config['I'])
+        self.J_teach /= np.sqrt(config['O'])
+
         super().__init__(config)
 
         # Configure Actor parameters
@@ -287,7 +291,9 @@ class Actor(AGEMONE):
         self.dJ_rec_accumulate += reward * self.dJ_filt_rec
         self.dJ_out_accumulate += reward * self.dJ_filt_out
 
-    def learn_from_evidence(self):
+    def learn_from_evidence(self, episode : int | None = None) -> None:
+        if 'learn_every_n' in self.config and episode % self.config['learn_every_n'] != 0: return
+
         self.J_rec = self.adam_rec.step(self.J_rec, self.dJ_rec_accumulate)
         self.J_out = self.adam_out.step(self.J_out, self.dJ_out_accumulate)
 
@@ -306,7 +312,11 @@ class Actor(AGEMONE):
 
 class Planner(AGEMONE):
 
-    def __init__(self, config : Dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config : Dict[str, Any],
+        use_block_inp : bool = False,
+    ) -> None:
         # Planner needs additional parameters for state prediction
         self.J_out_s = np.zeros((config['I'], config['N']))
         self.J_out_r = np.zeros((1, config['N']))
@@ -317,6 +327,16 @@ class Planner(AGEMONE):
 
         # This is the network input and teach matrices
         self.J_input = np.random.normal(0., config['sigma_input'], size = (config['N'], config['I'] + config['O']))
+
+        if use_block_inp:
+            # Impose block-like structure to J_input
+            self.J_input[config['N']//2:, :config['I']] = 0
+            self.J_input[:config['N']//2, config['I']:] = 0
+
+            self.J_input[:config['N']//2, :config['I']] /= np.sqrt(config['I'])   
+            self.J_input[config['N']//2:, config['I']:] /= np.sqrt(config['O'])
+        else:
+            self.J_input /= np.sqrt(config['I'] + config['O'])
 
         super().__init__(config)
 
@@ -337,7 +357,7 @@ class Planner(AGEMONE):
 
         return self.next_state, self.next_reward
 
-    def accumulate_evidence(self, pred : Tuple[np.ndarray, float], targ  : Tuple[np.ndarray, float], eta_rec_r : float = 0.5):
+    def accumulate_evidence(self, pred : Tuple[np.ndarray, float], targ : Tuple[np.ndarray, float], eta_rec_r : float = 0.5):
         s_pred, r_pred = pred
         s_targ, r_targ = targ
 
@@ -350,7 +370,9 @@ class Planner(AGEMONE):
         # self.dJ_rec_accumulate += dJ_s
         # self.dJ_rec_accumulate += dJ_r * eta_rec_r
 
-    def learn_from_evidence(self) -> None: 
+    def learn_from_evidence(self, episode : int | None = None) -> None:
+        if 'learn_every_n' in self.config and episode % self.config['learn_every_n'] != 0: return
+
         # self.J_rec = self.adam_rec.step(self.J_rec, self.dJ_rec_accumulate)
         self.J_out_s = self.adam_out_s.step(self.J_out_s, self.dJ_out_s_accumulate)
         self.J_out_r = self.adam_out_r.step(self.J_out_r, self.dJ_out_r_accumulate)

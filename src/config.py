@@ -228,20 +228,22 @@ BUTTONFOOD_V0_PLANNER = {
        'tau_ro'   : 1 * dt,
        'tau_star' : 1 * dt,
 
+       # 'learn_every_n' : 1,
+
        'N' : 500, 'I' : 50, 'O' : 8,
 
-       'dv' : 0.05 , 'Vo' : -4, 'h' : -8, 's_inh' : 100,
+       'dv' : 0.05 , 'Vo' : -4, 'h' : -4, 's_inh' : 40,
 
        'gamma' : .99,
        'lerp'  : 0.01,
 
-       'sigma_Jrec' : 0.0,
+       'sigma_Jrec' : 0.,
        'sigma_Jout' : 0.001,
 
-       'alpha_rec' : 0.000,
-       'alpha_out' : 1e-3,
+       'alpha_rec' : 0e-4,
+       'alpha_out' : 5e-4,
 
-       'sigma_input' : 10.,
+       'sigma_input' : 60.,
        'sigma_teach' : 10.,
        'hidden_steps' : 1,
 

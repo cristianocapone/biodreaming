@@ -112,8 +112,10 @@ class ButtonFood(Env):
         return {
             # The environment observation is the gaussian-encoded position
             # difference from target and button concatenated together
-            'agent_target' : self.encode(self._target_location - self._agent_location, dim = self._input_dim, domain = self.domain),
-            'agent_button' : self.encode(self._button_location - self._agent_location, dim = self._input_dim, domain = self.domain),
+            'ENC:target-agent' : self.encode(self._target_location - self._agent_location, dim = self._input_dim, domain = self.domain),
+            'ENC:button-agent' : self.encode(self._button_location - self._agent_location, dim = self._input_dim, domain = self.domain),
+            'target-agent' : self._target_location - self._agent_location,
+            'button-agent' : self._button_location - self._agent_location,
             'agent' : self._agent_location,
             'target': self._target_location,
             'button': self._button_location,
@@ -125,6 +127,7 @@ class ButtonFood(Env):
             'done' : self.done,
             'time' : self.time,
             'reward' : self.reward,
+            'velocity' : self._agent_velocity,
             'target_distance' : euclidean(self._agent_location, self._target_location),
             'button_distance' : euclidean(self._agent_location, self._button_location),
             'button_pressed'  : self.is_button_pressed,
@@ -206,6 +209,7 @@ class ButtonFood(Env):
         self.is_button_pressed = options['button_pressed'] 
         self.time = 0
         self.done = False
+        self.reward = 0
 
         obs  = self._get_obs()
         info = self._get_info()
@@ -312,6 +316,9 @@ class ButtonFood(Env):
 
     def unregister_step_callback(self) -> None:
         self.step_callback = None 
+
+    def __str__(self):
+        return '<gym.env.ButtonFood-v0>'
 
     @classmethod
     def encode(
