@@ -10,6 +10,7 @@ from argparse import Namespace
 
 from scipy.stats import pearsonr
 
+from src.utils import default
 from src.agent import Actor, Planner
 from src.config import Config
 from src.monitor import Recorder
@@ -63,15 +64,13 @@ def main(args : Namespace):
                         )
 
             # * §§§ Awake phase §§§
-            r_tot = 0
+            r_tot, r_corr = 0, None
             done, timeout = False, False
 
             r_true_hist, r_pred_hist = [], []
-            s_true_hist, s_pred_hist = [], [] 
+            s_true_hist, s_pred_hist = [], []
 
-            # actseq = [np.random.randint(args.num_actions)] * np.random.randint(1, 5)
-
-            while not done and not timeout and episode < args.real_world_until:
+            while not done and not timeout:
                 state = obs[env_state_key]
 
                 # * Agent action
@@ -80,63 +79,62 @@ def main(args : Namespace):
                     deterministic = True,
                     episode = episode
                 )
-                # if len(actseq) < 1: actseq = [np.random.randint(args.num_actions)] * np.random.randint(1, 5)
-                # action = actseq.pop()
-
-                # * Planner action: prediction of next env state
-                # state = obs['target'] - obs['agent']
-                pred_state, pred_reward = planner.step(
-                                            state,
-                                            # Convert action to one-hot for concatenation with the state
-                                            action = np.eye(args.num_actions)[action],
-                                            deterministic = True,
-                                            episode = episode,
-                                        )
 
                 # * Environment step
                 obs, true_reward, done, timeout, info = env.step(action, episode = episode)
-
-                # Update agents using the reward signal and planner using the prediction to
-                # the next environment state and reward
-                agent.accumulate_evidence(true_reward)
-                # true_state = obs['target'] - obs['agent']
                 true_state = obs[env_state_key]
-                planner.accumulate_evidence((pred_state, pred_reward), (true_state, true_reward))
 
                 r_tot += true_reward
-
                 r_true_hist.append(true_reward)
-                r_pred_hist.append(pred_reward)
 
-                s_true_hist.append(true_state)
-                s_pred_hist.append(pred_state)
+                if episode < args.real_world_until:
+                    # * Planner action: prediction of next env state
+                    pred_state, pred_reward = planner.step(
+                                                state,
+                                                # Convert action to one-hot for concatenation with the state
+                                                action = np.eye(args.num_actions)[action],
+                                                deterministic = True,
+                                                episode = episode,
+                                            )
+
+
+                    # Update agents using the reward signal and planner using the prediction to
+                    # the next environment state and reward
+                    agent.accumulate_evidence(true_reward)
+                    planner.accumulate_evidence((pred_state, pred_reward), (true_state, true_reward))
+
+                    r_pred_hist.append(pred_reward)
+
+                    s_true_hist.append(true_state)
+                    s_pred_hist.append(pred_state)
 
             # Commit monitor buffer after episode end to have clear episode separation in data
             monitor.commit_buffer()
 
-            agent.learn_from_evidence(episode = episode)
-            planner.learn_from_evidence(episode = episode)
-
             r_true_hist = np.array(r_true_hist).ravel()
-            r_pred_hist = np.array(r_pred_hist).ravel()
-            s_true_hist = np.array(s_true_hist).ravel()
-            s_pred_hist = np.array(s_pred_hist).ravel()
-             
-            r_corr = pearsonr(r_true_hist, r_pred_hist).statistic
-            s_corr = pearsonr(s_true_hist, s_pred_hist).statistic
-
-            r_errs = mean_squared_error(r_true_hist, r_pred_hist)
-            s_errs = mean_squared_error(s_true_hist, s_pred_hist)
-
-            msg = f'Episode reward {r_tot:^{6}.2f} | Model-reward corr. {r_corr:^{6}.2f}'
-            iterator.set_description(msg)
 
             reward_tot.append(r_tot)
-            reward_corr.append(r_corr)
-            nstate_corr.append(s_corr)
 
-            reward_errs.append(r_errs)
-            nstate_errs.append(s_errs)
+            if episode < args.real_world_until:
+                # * Learn from experience 
+                agent.learn_from_evidence(episode = episode)
+                planner.learn_from_evidence(episode = episode)
+
+                r_pred_hist = np.array(r_pred_hist).ravel()
+                s_true_hist = np.array(s_true_hist).ravel()
+                s_pred_hist = np.array(s_pred_hist).ravel()
+                
+                r_corr = pearsonr(r_true_hist, r_pred_hist).statistic
+                s_corr = pearsonr(s_true_hist, s_pred_hist).statistic
+
+                r_errs = mean_squared_error(r_true_hist, r_pred_hist)
+                s_errs = mean_squared_error(s_true_hist, s_pred_hist)
+
+                reward_corr.append(r_corr)
+                nstate_corr.append(s_corr)
+
+                reward_errs.append(r_errs)
+                nstate_errs.append(s_errs)
  
             # * §§§ Dreaming phase §§§
             for _ in range(args.num_dream):
@@ -168,6 +166,10 @@ def main(args : Namespace):
 
                 agent.learn_from_evidence()
 
+            # Finally, update the episode stats
+            msg = f'Episode reward {r_tot:^{6}.2f} | Model-reward corr. {default(r_corr, np.nan):^{6}.2f}'
+            iterator.set_description(msg) 
+
         monitor['reward_tot'].append(reward_tot)
         monitor['reward_corr'].append(reward_corr)
         monitor['nstate_corr'].append(nstate_corr)
@@ -182,7 +184,7 @@ def main(args : Namespace):
         planner.save(path.join(args.save_dir, f'planner_{args.env}_{str(rep).zfill(2)}.pkl'))
 
         # Save the monitored quantities
-        filename = path.join(args.save_dir, f'stats_{args.env}.pkl')
+        filename = path.join(args.save_dir, f'stats_{args.env}_{args.version}.pkl')
         monitor.dump(filename)
 
 if __name__ == '__main__':
@@ -203,6 +205,8 @@ if __name__ == '__main__':
     parser.add_argument('-monitor', type = str, nargs = '*', default = [], help = 'Path to monitor configuration for metric recording')
     parser.add_argument('-monitor_freq', type = int, default = 1, help = 'Episode Frequency for metric recording')
     
+
+    parser.add_argument('-version', type = str, default = '0', help = 'Version of the experiment')
     parser.add_argument('-save_dir', type = str, default = 'data', help = 'Directory to save data')
     parser.add_argument('-load_dir', type = str, default = 'data', help = 'Directory to load data')
 

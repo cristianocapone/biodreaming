@@ -56,21 +56,6 @@ class ButtonFood(Env):
         self.action_space = spaces.Discrete(num_actions) if num_actions > 0 else\
             spaces.Box(-max_speed, max_speed, shape=(2,), dtype=float)
 
-        # The observation space corresponds to the (x, y) coordinates for the agent,
-        # the target and the food location in the 2D world
-        self.observation_space = spaces.Dict(
-            {
-                
-                'ENC_target-agent' : spaces.Box(*domain, shape=(2 * input_dim,), dtype=float),
-                'ENC_button-agent' : spaces.Box(*domain, shape=(2 * input_dim,), dtype=float),
-                'target-agent' : spaces.Box(*(-1, 1), shape=(2,), dtype=float),
-                'button-agent' : spaces.Box(*(-1, 1), shape=(2,), dtype=float),
-                'agent' : spaces.Box(*domain, shape=(2,), dtype=float),
-                'target': spaces.Box(*domain, shape=(2,), dtype=float),
-                'button': spaces.Box(*domain, shape=(2,), dtype=float),
-            }
-        )
-
         self.reward_range = spaces.Box(0, 1 / self._target_radius, shape=(1,), dtype=float)
         
         assert render_mode is None or render_mode in self.metadata["render_modes"]
@@ -78,7 +63,23 @@ class ButtonFood(Env):
 
         # Here we collect environment duration and span
         self.time_limit = time_limit
-        self.domain = np.array(domain)
+        self.pos_domain = domain
+        self.dif_domain = (min(domain) - max(domain), max(domain) - min(domain))
+
+        # The observation space corresponds to the (x, y) coordinates for the agent,
+        # the target and the food location in the 2D world
+        self.observation_space = spaces.Dict(
+            {
+                
+                'ENC_target-agent' : spaces.Box(*(0, 1), shape=(2 * input_dim,), dtype=float),
+                'ENC_button-agent' : spaces.Box(*(0, 1), shape=(2 * input_dim,), dtype=float),
+                'target-agent' : spaces.Box(*self.dif_domain, shape=(2,), dtype=float),
+                'button-agent' : spaces.Box(*self.dif_domain, shape=(2,), dtype=float),
+                'agent' : spaces.Box(*self.pos_domain, shape=(2,), dtype=float),
+                'target': spaces.Box(*self.pos_domain, shape=(2,), dtype=float),
+                'button': spaces.Box(*self.pos_domain, shape=(2,), dtype=float),
+            }
+        )
 
         # Internal timekeeping & done flag
         self.time = 0 
@@ -115,8 +116,8 @@ class ButtonFood(Env):
         return {
             # The environment observation is the gaussian-encoded position
             # difference from target and button concatenated together
-            'ENC_target-agent' : self.encode(self._target_location - self._agent_location, dim = self._input_dim, domain = self.domain),
-            'ENC_button-agent' : self.encode(self._button_location - self._agent_location, dim = self._input_dim, domain = self.domain),
+            'ENC_target-agent' : self.encode(self._target_location - self._agent_location, dim = self._input_dim, domain = self.dif_domain),
+            'ENC_button-agent' : self.encode(self._button_location - self._agent_location, dim = self._input_dim, domain = self.dif_domain),
             'target-agent' : self._target_location - self._agent_location,
             'button-agent' : self._button_location - self._agent_location,
             'agent' : self._agent_location,
@@ -142,7 +143,7 @@ class ButtonFood(Env):
         # Action is the instantaneous speed in the x- and y-direction
         self._agent_location += self._agent_velocity
         self._agent_location = np.clip(
-            self._agent_location, *self.domain,
+            self._agent_location, *self.pos_domain,
         )
 
         # * Update the environment flag and compute the reward
@@ -189,15 +190,15 @@ class ButtonFood(Env):
         options = default(options, {'button_pressed' : False})
 
         # We will sample the target's location randomly until it does not coincide with the agent's location
-        self._agent_location  = np.array(default(init_agent,  self.np_random.uniform(*self.domain, size=2)))
-        self._button_location = np.array(default(init_button, self.np_random.uniform(*self.domain, size=2)))
+        self._agent_location  = np.array(default(init_agent,  self.np_random.uniform(*self.pos_domain, size=2)))
+        self._button_location = np.array(default(init_button, self.np_random.uniform(*self.pos_domain, size=2)))
         self._target_location = np.array(default(init_target, self._button_location))
 
         self._target_identity = self.np_random.integers(0, 40, size=(2,))
 
         while euclidean(self._button_location, self._target_location) < self._button_radius or\
               euclidean(self._agent_location,  self._target_location) < 0.2:
-            self._target_location = self.np_random.uniform(*self.domain, size=2)
+            self._target_location = self.np_random.uniform(*self.pos_domain, size=2)
 
         self.is_button_pressed = options['button_pressed'] 
         self.time = 0
@@ -246,7 +247,7 @@ class ButtonFood(Env):
         canvas.fill(white)
 
         # Draw a visual grid
-        for x in np.linspace(*self.domain, num_grid_lines):
+        for x in np.linspace(*self.pos_domain, num_grid_lines):
             pg.draw.line(
                 canvas,
                 color = (127, 127, 127),
